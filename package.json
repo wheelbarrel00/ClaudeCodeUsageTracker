@@ -1,0 +1,74 @@
+{
+  "name": "claude-code-usage-tracker",
+  "displayName": "Claude Code Usage Tracker",
+  "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
+  "version": "0.0.1",
+  "publisher": "wheelbarrel00",
+  "author": { "name": "Wheelbarrel00" },
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wheelbarrel00/ClaudeCodeUsageTracker.git"
+  },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other", "Visualization"],
+  "keywords": ["claude", "claude code", "usage", "cost", "tokens"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeCodeUsageTracker.showDashboard",
+        "title": "Claude Code Usage Tracker: Show Dashboard"
+      },
+      {
+        "command": "claudeCodeUsageTracker.refresh",
+        "title": "Claude Code Usage Tracker: Refresh"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Code Usage Tracker",
+      "properties": {
+        "claudeCodeUsageTracker.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "description": "How often to refresh usage data, in seconds."
+        },
+        "claudeCodeUsageTracker.currency": {
+          "type": "string",
+          "default": "USD",
+          "description": "ISO currency code used to format cost estimates."
+        },
+        "claudeCodeUsageTracker.decimalPlaces": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 6,
+          "description": "Decimal places shown for cost figures."
+        },
+        "claudeCodeUsageTracker.showCost": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show today's estimated cost in the status bar."
+        },
+        "claudeCodeUsageTracker.showTokens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show today's token count in the status bar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}
