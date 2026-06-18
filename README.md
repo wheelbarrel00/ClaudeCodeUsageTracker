@@ -1,24 +1,29 @@
-# Claude Code Usage Tracker
+<p align="center">
+  <img src="icon.png" alt="Claude Code Usage Tracker" width="120" />
+</p>
 
-A VS Code / Cursor extension that tracks your Claude Code token usage and
-estimated cost from your local logs, and shows it at a glance in the status bar.
+<h1 align="center">Claude Code Usage Tracker</h1>
 
-> Status: early development. This is a skeleton — the data layer and dashboard
-> are stubbed out and being built milestone by milestone.
+<p align="center">
+  A VS Code / Cursor extension that tracks your Claude Code token usage and
+  estimated cost from your local logs &mdash; in the status bar and a dashboard.
+</p>
 
 ## Features
 
-**Now (scaffold)**
-- Status-bar item (click to open the dashboard).
-- Settings for refresh interval, currency, decimal places, and toggling the
-  cost / token figures.
+- **Status bar** &mdash; today's estimated cost and token count, always visible. Click to open the dashboard.
+- **Live updates** &mdash; a file watcher refreshes the moment Claude Code writes new logs, with a timer as a fallback.
+- **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown.
+- **Per-model and per-project breakdowns** &mdash; see where your tokens and spend actually go.
+- **Cost estimates** &mdash; from a per-model price table, with prefix matching for dated and suffixed model ids.
 
-**Planned**
-- Parse `~/.claude/projects/**/*.jsonl`, with live refresh via a file watcher.
-- Today / This Month / All Time totals in a dashboard webview.
-- Estimated cost from a per-model price table.
-- Optional live 5-hour / weekly limit indicator.
-- Per-project breakdown and simple charts.
+## How it works
+
+Claude Code writes a JSONL transcript per session under `~/.claude/projects`. The
+extension walks those logs, parses each line into a per-message usage record, and
+deduplicates the entries that repeat once per content block. Records are
+aggregated by day, month, and all-time, and grouped by model and project, then
+priced with a per-model rate table.
 
 ## Settings
 
@@ -42,4 +47,4 @@ npm run compile             # type-check + build to ./out
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT &mdash; see [LICENSE](./LICENSE).
