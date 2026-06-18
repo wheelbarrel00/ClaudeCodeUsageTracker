@@ -8,3 +8,6 @@ node_modules/**
 tsconfig.json
 .git/**
 *.vsix
+CLAUDE.md
+images/**
+!images/stats.png
