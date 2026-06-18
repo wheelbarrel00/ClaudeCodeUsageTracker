@@ -1,6 +1,5 @@
 import { TokenCounts } from './types';
 
-/** Per-million-token prices, in USD. */
 export interface ModelPricing {
   input: number;
   output: number;
@@ -8,20 +7,18 @@ export interface ModelPricing {
   cacheRead: number;
 }
 
-// ---------------------------------------------------------------------------
-// PLACEHOLDER STARTER VALUES — verify against current Anthropic pricing before
-// you publish. Keep this the single source of truth for cost math so prices are
-// trivial to update when models or rates change.
-// ---------------------------------------------------------------------------
+// USD per million tokens; cache-write = 1.25x input, cache-read = 0.1x input
 const PRICING: Record<string, ModelPricing> = {
-  'claude-sonnet-4-5': { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
-  'claude-opus-4-1': { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
+  'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1.0 },
+  'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-opus-4-7': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-opus-4-6': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-sonnet-4-6': { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   'claude-haiku-4-5': { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
 };
 
-const DEFAULT_PRICING: ModelPricing = PRICING['claude-sonnet-4-5'];
+const DEFAULT_PRICING: ModelPricing = PRICING['claude-sonnet-4-6'];
 
-/** Resolve a model id (which may carry date / long-context suffixes) to pricing. */
 export function pricingForModel(model: string): ModelPricing {
   if (PRICING[model]) {
     return PRICING[model];
@@ -30,7 +27,6 @@ export function pricingForModel(model: string): ModelPricing {
   return prefixMatch ? PRICING[prefixMatch] : DEFAULT_PRICING;
 }
 
-/** Estimate USD cost for a set of token counts under a given model. */
 export function estimateCost(tokens: TokenCounts, model: string): number {
   const p = pricingForModel(model);
   const raw =
