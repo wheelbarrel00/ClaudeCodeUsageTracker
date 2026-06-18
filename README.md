@@ -9,6 +9,10 @@
   estimated cost from your local logs &mdash; in the status bar and a dashboard.
 </p>
 
+<p align="center">
+  <img src="images/stats.png" alt="Claude Code Usage dashboard" width="900" />
+</p>
+
 ## Features
 
 - **Status bar** &mdash; today's estimated cost and token count, always visible. Click to open the dashboard.
