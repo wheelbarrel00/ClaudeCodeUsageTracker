@@ -1,7 +1,9 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { StatusBarController } from './statusBar';
 import { Dashboard } from './dashboard';
 import { loadUsageRecords, summarize, filterToday, claudeLogRoot } from './dataLoader';
+import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -14,6 +16,7 @@ let refreshInFlight = false;
 let refreshAgain = false;
 let latest: UsageSummary = emptySummary();
 let latestRecords: UsageRecord[] = [];
+let latestLimits: PlanLimits | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBarController();
@@ -27,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
-        statusBar.render(latest);
+        statusBar.render(latest, latestLimits);
         scheduleRefresh();
       }
     })
@@ -51,10 +54,11 @@ async function refresh(): Promise<void> {
   try {
     do {
       refreshAgain = false;
-      const records = await loadUsageRecords();
+      const [records, limits] = await Promise.all([loadUsageRecords(), loadPlanLimits()]);
       latestRecords = records;
+      latestLimits = limits;
       latest = summarize(filterToday(records));
-      statusBar.render(latest);
+      statusBar.render(latest, latestLimits);
       dashboard.update(latestRecords);
     } while (refreshAgain);
   } finally {
@@ -78,12 +82,15 @@ function stopRefresh(): void {
 }
 
 function startWatcher(context: vscode.ExtensionContext): void {
+  context.subscriptions.push({ dispose: clearWatchDebounce });
+  watchGlob(context, claudeLogRoot(), '**/*.jsonl');
+  watchGlob(context, path.dirname(usageCachePath()), path.basename(usageCachePath()));
+}
+
+function watchGlob(context: vscode.ExtensionContext, base: string, glob: string): void {
   let watcher: vscode.FileSystemWatcher;
   try {
-    const pattern = new vscode.RelativePattern(
-      vscode.Uri.file(claudeLogRoot()),
-      '**/*.jsonl'
-    );
+    const pattern = new vscode.RelativePattern(vscode.Uri.file(base), glob);
     watcher = vscode.workspace.createFileSystemWatcher(pattern);
   } catch {
     return;
@@ -93,8 +100,7 @@ function startWatcher(context: vscode.ExtensionContext): void {
     watcher,
     watcher.onDidCreate(onActivity),
     watcher.onDidChange(onActivity),
-    watcher.onDidDelete(onActivity),
-    { dispose: clearWatchDebounce }
+    watcher.onDidDelete(onActivity)
   );
 }
 

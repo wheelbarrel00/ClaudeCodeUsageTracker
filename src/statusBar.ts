@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
+import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -16,25 +17,90 @@ export class StatusBarController {
   }
 
   /** Render a usage summary, honouring the user's display settings. */
-  render(summary: UsageSummary): void {
+  render(summary: UsageSummary, limits?: PlanLimits): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
+    const showLimits = cfg.get<boolean>('showLimits', true);
     const showCost = cfg.get<boolean>('showCost', true);
     const showTokens = cfg.get<boolean>('showTokens', true);
     const decimals = cfg.get<number>('decimalPlaces', 2);
     const currency = cfg.get<string>('currency', 'USD');
 
     const parts: string[] = [];
+    let rank = 0;
+    if (showLimits && limits) {
+      const seg = formatLimits(limits);
+      if (seg) {
+        parts.push(seg);
+      }
+      rank = Math.max(severityRank(limits.fiveHour?.severity), severityRank(limits.sevenDay?.severity));
+    }
     if (showCost) {
       parts.push(formatCurrency(summary.costUsd, currency, decimals));
     }
     if (showTokens) {
       parts.push(`${formatTokens(totalTokens(summary))} tok`);
     }
-    this.item.text = `$(graph) ${parts.join('  ') || 'Claude usage'}`;
+
+    const icon = rank >= 2 ? '$(error)' : rank >= 1 ? '$(warning)' : '$(graph)';
+    this.item.text = `${icon} ${parts.join('  ') || 'Claude usage'}`;
+    this.item.backgroundColor =
+      rank >= 2
+        ? new vscode.ThemeColor('statusBarItem.errorBackground')
+        : rank >= 1
+        ? new vscode.ThemeColor('statusBarItem.warningBackground')
+        : undefined;
+    this.item.tooltip = showLimits ? buildTooltip(limits) : 'Claude Code Usage Tracker';
   }
 
   dispose(): void {
     this.item.dispose();
+  }
+}
+
+function formatLimits(limits: PlanLimits): string {
+  const segs: string[] = [];
+  if (limits.fiveHour) {
+    segs.push(`5h ${Math.round(limits.fiveHour.utilization)}%`);
+  }
+  if (limits.sevenDay) {
+    segs.push(`wk ${Math.round(limits.sevenDay.utilization)}%`);
+  }
+  return segs.join(' · ');
+}
+
+function buildTooltip(limits?: PlanLimits): string {
+  if (!limits) {
+    return 'Claude Code Usage Tracker';
+  }
+  const lines = ['Claude plan limits'];
+  if (limits.fiveHour) {
+    lines.push(limitLine('5h', limits.fiveHour));
+  }
+  if (limits.sevenDay) {
+    lines.push(limitLine('Week', limits.sevenDay));
+  }
+  for (const scoped of limits.scoped) {
+    lines.push(limitLine(scoped.label, scoped));
+  }
+  return lines.length > 1 ? lines.join('\n') : 'Claude Code Usage Tracker';
+}
+
+function limitLine(label: string, window: LimitWindow): string {
+  const reset = formatReset(window.resetsAt);
+  const pct = `${Math.round(window.utilization)}%`;
+  return reset ? `${label}: ${pct}  ·  ${reset}` : `${label}: ${pct}`;
+}
+
+function severityRank(severity?: string): number {
+  switch (severity) {
+    case 'critical':
+    case 'error':
+      return 2;
+    case undefined:
+    case 'normal':
+      return 0;
+    default:
+      return 1;
   }
 }
 

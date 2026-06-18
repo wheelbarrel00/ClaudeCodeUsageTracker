@@ -48,6 +48,11 @@
           "maximum": 6,
           "description": "Decimal places shown for cost figures."
         },
+        "claudeCodeUsageTracker.showLimits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 5-hour and weekly plan-limit utilization in the status bar."
+        },
         "claudeCodeUsageTracker.showCost": {
           "type": "boolean",
           "default": true,
