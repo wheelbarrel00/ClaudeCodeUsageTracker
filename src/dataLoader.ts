@@ -11,6 +11,18 @@ export interface GroupSummary {
   summary: UsageSummary;
 }
 
+interface ParsedEntry {
+  key: string;
+  record: UsageRecord;
+}
+
+interface CachedFile {
+  mtimeMs: number;
+  entries: ParsedEntry[];
+}
+
+const fileCache = new Map<string, CachedFile>();
+
 export function claudeLogRoot(): string {
   return path.join(os.homedir(), '.claude', 'projects');
 }
@@ -84,40 +96,72 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
   return { key, record };
 }
 
-export async function loadUsageRecords(): Promise<UsageRecord[]> {
-  const files = await findJsonlFiles(claudeLogRoot());
+async function parseFile(file: string): Promise<ParsedEntry[]> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const entries: ParsedEntry[] = [];
   const seen = new Set<string>();
-  const records: UsageRecord[] = [];
-
-  for (const file of files) {
-    let text: string;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let raw: any;
     try {
-      text = await fs.promises.readFile(file, 'utf8');
+      raw = JSON.parse(trimmed);
     } catch {
       continue;
     }
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      let entry: any;
-      try {
-        entry = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      const parsed = parseUsageEntry(entry);
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.key) {
-        if (seen.has(parsed.key)) {
+    const parsed = parseUsageEntry(raw);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.key && seen.has(parsed.key)) {
+      continue;
+    }
+    if (parsed.key) {
+      seen.add(parsed.key);
+    }
+    entries.push(parsed);
+  }
+  return entries;
+}
+
+export async function loadUsageRecords(): Promise<UsageRecord[]> {
+  const files = await findJsonlFiles(claudeLogRoot());
+  const present = new Set(files);
+  for (const cached of fileCache.keys()) {
+    if (!present.has(cached)) {
+      fileCache.delete(cached);
+    }
+  }
+
+  const seen = new Set<string>();
+  const records: UsageRecord[] = [];
+  for (const file of files) {
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await fs.promises.stat(file)).mtimeMs;
+    } catch {
+      continue;
+    }
+    let cached = fileCache.get(file);
+    if (!cached || cached.mtimeMs !== mtimeMs) {
+      cached = { mtimeMs, entries: await parseFile(file) };
+      fileCache.set(file, cached);
+    }
+    for (const { key, record } of cached.entries) {
+      if (key) {
+        if (seen.has(key)) {
           continue;
         }
-        seen.add(parsed.key);
+        seen.add(key);
       }
-      records.push(parsed.record);
+      records.push(record);
     }
   }
   return records;
