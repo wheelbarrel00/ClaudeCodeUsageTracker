@@ -11,45 +11,58 @@ import {
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
-interface TimeWindow {
+interface WindowData {
   title: string;
   summary: UsageSummary;
+  byModel: GroupSummary[];
+  byProject: GroupSummary[];
 }
 
 export class Dashboard {
   private panel: vscode.WebviewPanel | undefined;
   private records: UsageRecord[] = [];
+  private ready = false;
 
   show(records: UsageRecord[]): void {
     this.records = records;
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Active);
-    } else {
-      this.panel = vscode.window.createWebviewPanel(
-        'claudeCodeUsageTracker.dashboard',
-        'Claude Code Usage',
-        vscode.ViewColumn.Active,
-        { enableScripts: false, retainContextWhenHidden: true }
-      );
-      this.panel.onDidDispose(() => {
-        this.panel = undefined;
-      });
+      if (this.ready) {
+        this.post();
+      }
+      return;
     }
-    this.rerender();
+    this.ready = false;
+    this.panel = vscode.window.createWebviewPanel(
+      'claudeCodeUsageTracker.dashboard',
+      'Claude Code Usage',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+      this.ready = false;
+    });
+    this.panel.webview.onDidReceiveMessage((message) => {
+      if (message && message.type === 'ready') {
+        this.ready = true;
+        this.post();
+      }
+    });
+    this.panel.webview.html = shellHtml(this.panel.webview);
   }
 
   update(records: UsageRecord[]): void {
     this.records = records;
-    if (this.panel) {
-      this.rerender();
+    if (this.panel && this.ready) {
+      this.post();
     }
   }
 
-  private rerender(): void {
-    if (!this.panel) {
-      return;
+  private post(): void {
+    if (this.panel) {
+      this.panel.webview.postMessage(buildPayload(this.records));
     }
-    this.panel.webview.html = renderHtml(this.panel.webview, this.records);
   }
 
   dispose(): void {
@@ -57,71 +70,46 @@ export class Dashboard {
   }
 }
 
-function renderHtml(webview: vscode.Webview, records: UsageRecord[]): string {
+function buildPayload(records: UsageRecord[]): { cardsHtml: string; tables: Record<string, string> } {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
   const money = (value: number): string => formatCurrency(value, currency, decimals);
 
-  const windows: TimeWindow[] = [
-    { title: 'Today', summary: summarize(filterToday(records)) },
-    { title: 'This Month', summary: summarize(filterMonth(records)) },
-    { title: 'All Time', summary: summarize(records) },
-  ];
-  const cards = windows.map((w) => card(w, money)).join('\n');
-  const models = breakdownTable('By model — all time', 'Model', summarizeByModel(records), money);
-  const projects = breakdownTable('By project — all time', 'Project', summarizeByProject(records), money);
-  const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline';`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Claude Code Usage</title>
-  <style>
-    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 1.5rem; }
-    h1 { font-size: 1.3rem; margin: 0 0 1rem; }
-    h2.section { font-size: 0.95rem; margin: 1.75rem 0 0.5rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
-    .card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 1rem 1.25rem; background: var(--vscode-editorWidget-background); }
-    .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin: 0 0 0.5rem; }
-    .cost { font-size: 1.8rem; font-weight: 600; }
-    .messages { opacity: 0.7; margin-bottom: 0.75rem; font-size: 0.85rem; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    td, th { padding: 0.15rem 0; }
-    .num { text-align: right; font-variant-numeric: tabular-nums; }
-    tr.total td { border-top: 1px solid var(--vscode-panel-border); padding-top: 0.35rem; font-weight: 600; }
-    table.breakdown th { text-align: left; opacity: 0.7; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.35rem; }
-    table.breakdown th.num { text-align: right; }
-    table.breakdown td { padding: 0.25rem 0.75rem 0.25rem 0; }
-    .note { margin-top: 1.25rem; font-size: 0.8rem; opacity: 0.65; max-width: 64ch; line-height: 1.45; }
-  </style>
-</head>
-<body>
-  <h1>Claude Code Usage</h1>
-  <div class="grid">
-${cards}
-  </div>
-  ${models}
-  ${projects}
-  <p class="note">Token counts are dominated by <strong>cache reads</strong> &mdash; the conversation
-  context that is re-read on every request. They are the cheapest token type (about $0.50 per million
-  on Opus), so a large total token figure usually accounts for only a small share of cost.</p>
-</body>
-</html>`;
+  const windows: Record<string, WindowData> = {
+    today: windowData('Today', filterToday(records)),
+    month: windowData('This Month', filterMonth(records)),
+    all: windowData('All Time', records),
+  };
+  const order = ['today', 'month', 'all'];
+  const cardsHtml = order.map((key) => card(windows[key], money)).join('\n');
+  const tables: Record<string, string> = {};
+  for (const key of order) {
+    tables[key] =
+      breakdownTable('By model', 'Model', windows[key].byModel, money) +
+      breakdownTable('By project', 'Project', windows[key].byProject, money);
+  }
+  return { cardsHtml, tables };
 }
 
-function card(window: TimeWindow, money: (value: number) => string): string {
-  const t = window.summary.tokens;
+function windowData(title: string, records: UsageRecord[]): WindowData {
+  return {
+    title,
+    summary: summarize(records),
+    byModel: summarizeByModel(records),
+    byProject: summarizeByProject(records),
+  };
+}
+
+function card(win: WindowData, money: (value: number) => string): string {
+  const t = win.summary.tokens;
   const total = t.input + t.output + t.cacheWrite + t.cacheRead;
   const row = (label: string, value: number): string =>
     `<tr><td>${label}</td><td class="num">${value.toLocaleString('en-US')}</td></tr>`;
   return `    <section class="card">
-      <h2>${window.title}</h2>
-      <div class="cost">${money(window.summary.costUsd)}</div>
-      <div class="messages">${window.summary.messageCount.toLocaleString('en-US')} messages</div>
+      <h2>${win.title}</h2>
+      <div class="cost">${money(win.summary.costUsd)}</div>
+      <div class="messages">${win.summary.messageCount.toLocaleString('en-US')} messages</div>
       <table>
         ${row('Input', t.input)}
         ${row('Output', t.output)}
@@ -155,6 +143,90 @@ function breakdownTable(
 ${rows}
     </tbody>
   </table>`;
+}
+
+function shellHtml(webview: vscode.Webview): string {
+  const nonce = makeNonce();
+  const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Code Usage</title>
+  <style>
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 1.5rem; }
+    h1 { font-size: 1.3rem; margin: 0 0 1rem; }
+    h2.section { font-size: 0.95rem; margin: 1.5rem 0 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 1rem 1.25rem; background: var(--vscode-editorWidget-background); }
+    .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin: 0 0 0.5rem; }
+    .cost { font-size: 1.8rem; font-weight: 600; }
+    .messages { opacity: 0.7; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    td, th { padding: 0.15rem 0; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    tr.total td { border-top: 1px solid var(--vscode-panel-border); padding-top: 0.35rem; font-weight: 600; }
+    table.breakdown th { text-align: left; opacity: 0.7; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.35rem; }
+    table.breakdown th.num { text-align: right; }
+    table.breakdown td { padding: 0.25rem 0.75rem 0.25rem 0; }
+    .tabs { display: flex; gap: 0.4rem; margin: 1.75rem 0 0.25rem; }
+    .tabs button { font: inherit; color: var(--vscode-foreground); background: transparent; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 0.3rem 0.8rem; cursor: pointer; }
+    .tabs button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .tabs button.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+    .note { margin-top: 1.25rem; font-size: 0.8rem; opacity: 0.65; max-width: 64ch; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <h1>Claude Code Usage</h1>
+  <div id="cards" class="grid"></div>
+  <div class="tabs" id="tabs">
+    <button data-window="today">Today</button>
+    <button data-window="month">This Month</button>
+    <button data-window="all">All Time</button>
+  </div>
+  <div id="tables"></div>
+  <p class="note">Token counts are dominated by <strong>cache reads</strong> &mdash; the conversation
+  context that is re-read on every request. They are the cheapest token type (about $0.50 per million
+  on Opus), so a large total token figure usually accounts for only a small share of cost.</p>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const saved = vscode.getState();
+    let sel = (saved && saved.window) || 'all';
+    let tables = null;
+    const tablesEl = document.getElementById('tables');
+    const buttons = Array.from(document.querySelectorAll('#tabs button'));
+    function paint() {
+      tablesEl.innerHTML = tables ? (tables[sel] || '') : '';
+      buttons.forEach((b) => b.classList.toggle('active', b.dataset.window === sel));
+    }
+    buttons.forEach((b) => {
+      b.addEventListener('click', () => {
+        sel = b.dataset.window;
+        vscode.setState({ window: sel });
+        paint();
+      });
+    });
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      document.getElementById('cards').innerHTML = data.cardsHtml;
+      tables = data.tables;
+      paint();
+    });
+    vscode.postMessage({ type: 'ready' });
+  </script>
+</body>
+</html>`;
+}
+
+function makeNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let nonce = '';
+  for (let i = 0; i < 24; i++) {
+    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return nonce;
 }
 
 function formatCurrency(value: number, currency: string, decimals: number): string {
