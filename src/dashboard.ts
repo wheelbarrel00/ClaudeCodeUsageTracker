@@ -8,6 +8,7 @@ import {
   summarizeByProject,
   GroupSummary,
 } from './dataLoader';
+import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -21,10 +22,12 @@ interface WindowData {
 export class Dashboard {
   private panel: vscode.WebviewPanel | undefined;
   private records: UsageRecord[] = [];
+  private limits: PlanLimits | undefined;
   private ready = false;
 
-  show(records: UsageRecord[]): void {
+  show(records: UsageRecord[], limits?: PlanLimits): void {
     this.records = records;
+    this.limits = limits;
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Active);
       if (this.ready) {
@@ -52,8 +55,9 @@ export class Dashboard {
     this.panel.webview.html = shellHtml(this.panel.webview);
   }
 
-  update(records: UsageRecord[]): void {
+  update(records: UsageRecord[], limits?: PlanLimits): void {
     this.records = records;
+    this.limits = limits;
     if (this.panel && this.ready) {
       this.post();
     }
@@ -61,7 +65,7 @@ export class Dashboard {
 
   private post(): void {
     if (this.panel) {
-      this.panel.webview.postMessage(buildPayload(this.records));
+      this.panel.webview.postMessage(buildPayload(this.records, this.limits));
     }
   }
 
@@ -70,7 +74,10 @@ export class Dashboard {
   }
 }
 
-function buildPayload(records: UsageRecord[]): { cardsHtml: string; tables: Record<string, string> } {
+function buildPayload(
+  records: UsageRecord[],
+  limits: PlanLimits | undefined
+): { limitsHtml: string; cardsHtml: string; tables: Record<string, string> } {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
@@ -89,7 +96,55 @@ function buildPayload(records: UsageRecord[]): { cardsHtml: string; tables: Reco
       breakdownTable('By model', 'Model', windows[key].byModel, money) +
       breakdownTable('By project', 'Project', windows[key].byProject, money);
   }
-  return { cardsHtml, tables };
+  return { limitsHtml: limitsSection(limits), cardsHtml, tables };
+}
+
+function limitsSection(limits: PlanLimits | undefined): string {
+  if (!limits) {
+    return '';
+  }
+  const rows: string[] = [];
+  if (limits.fiveHour) {
+    rows.push(barRow('5-hour session', limits.fiveHour));
+  }
+  if (limits.sevenDay) {
+    rows.push(barRow('Weekly · all models', limits.sevenDay));
+  }
+  for (const scoped of limits.scoped) {
+    rows.push(barRow(`Weekly · ${scoped.label}`, scoped));
+  }
+  if (rows.length === 0) {
+    return '';
+  }
+  return `<section class="limits">
+    <h2 class="section">Plan limits</h2>
+    <div class="bars">
+${rows.join('\n')}
+    </div>
+  </section>`;
+}
+
+function barRow(label: string, window: LimitWindow): string {
+  const pct = Math.round(window.utilization);
+  const width = Math.min(100, Math.max(0, pct));
+  const reset = formatReset(window.resetsAt);
+  const sub = reset ? `\n        <div class="bar-sub">${reset}</div>` : '';
+  return `      <div class="bar-row">
+        <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
+        <div class="bar-track"><div class="bar-fill ${severityClass(window.severity)}" style="width:${width}%"></div></div>${sub}
+      </div>`;
+}
+
+function severityClass(severity: string): string {
+  switch (severity) {
+    case 'critical':
+    case 'error':
+      return 'error';
+    case 'normal':
+      return 'normal';
+    default:
+      return 'warning';
+  }
 }
 
 function windowData(title: string, records: UsageRecord[]): WindowData {
@@ -171,6 +226,16 @@ function shellHtml(webview: vscode.Webview): string {
     table.breakdown th { text-align: left; opacity: 0.7; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.35rem; }
     table.breakdown th.num { text-align: right; }
     table.breakdown td { padding: 0.25rem 0.75rem 0.25rem 0; }
+    .limits { margin: 0 0 1.75rem; }
+    .limits h2.section { margin-top: 0; }
+    .bars { display: flex; flex-direction: column; gap: 0.85rem; max-width: 520px; }
+    .bar-head { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .bar-pct { font-variant-numeric: tabular-nums; opacity: 0.85; }
+    .bar-track { height: 8px; border-radius: 4px; background: var(--vscode-panel-border); overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; background: var(--vscode-progressBar-background); }
+    .bar-fill.warning { background: var(--vscode-charts-yellow, #d7a000); }
+    .bar-fill.error { background: var(--vscode-charts-red, #d33); }
+    .bar-sub { margin-top: 0.2rem; font-size: 0.78rem; opacity: 0.6; }
     .tabs { display: flex; gap: 0.4rem; margin: 1.75rem 0 0.25rem; }
     .tabs button { font: inherit; color: var(--vscode-foreground); background: transparent; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 0.3rem 0.8rem; cursor: pointer; }
     .tabs button:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -180,6 +245,7 @@ function shellHtml(webview: vscode.Webview): string {
 </head>
 <body>
   <h1>Claude Code Usage</h1>
+  <div id="limits"></div>
   <div id="cards" class="grid"></div>
   <div class="tabs" id="tabs">
     <button data-window="today">Today</button>
@@ -210,6 +276,7 @@ function shellHtml(webview: vscode.Webview): string {
     });
     window.addEventListener('message', (event) => {
       const data = event.data;
+      document.getElementById('limits').innerHTML = data.limitsHtml || '';
       document.getElementById('cards').innerHTML = data.cardsHtml;
       tables = data.tables;
       paint();

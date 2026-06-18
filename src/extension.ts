@@ -27,7 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
     dashboard,
     { dispose: stopRefresh },
     vscode.commands.registerCommand(`${CONFIG_SECTION}.refresh`, () => void refresh()),
-    vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords)),
+    vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords, latestLimits)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
         statusBar.render(latest, latestLimits);
@@ -59,7 +59,7 @@ async function refresh(): Promise<void> {
       latestLimits = limits;
       latest = summarize(filterToday(records));
       statusBar.render(latest, latestLimits);
-      dashboard.update(latestRecords);
+      dashboard.update(latestRecords, latestLimits);
     } while (refreshAgain);
   } finally {
     refreshInFlight = false;
