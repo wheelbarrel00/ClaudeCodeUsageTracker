@@ -53,6 +53,11 @@
           "default": true,
           "description": "Show 5-hour and weekly plan-limit utilization in the status bar."
         },
+        "claudeCodeUsageTracker.showOpusWeekly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also show the weekly Opus limit (opus NN%) in the status bar, after the 5-hour and weekly figures. Requires Show Limits and a live weekly-Opus window."
+        },
         "claudeCodeUsageTracker.showCost": {
           "type": "boolean",
           "default": true,

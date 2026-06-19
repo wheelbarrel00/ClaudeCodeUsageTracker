@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
-import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
+import { PlanLimits, LimitWindow, ScopedLimit, formatReset } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -20,6 +20,7 @@ export class StatusBarController {
   render(summary: UsageSummary, limits?: PlanLimits): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const showLimits = cfg.get<boolean>('showLimits', true);
+    const showOpusWeekly = cfg.get<boolean>('showOpusWeekly', false);
     const showCost = cfg.get<boolean>('showCost', true);
     const showTokens = cfg.get<boolean>('showTokens', true);
     const decimals = cfg.get<number>('decimalPlaces', 2);
@@ -28,11 +29,16 @@ export class StatusBarController {
     const parts: string[] = [];
     let rank = 0;
     if (showLimits && limits) {
-      const seg = formatLimits(limits);
+      const opus = showOpusWeekly ? opusWindow(limits) : undefined;
+      const seg = formatLimits(limits, opus);
       if (seg) {
         parts.push(seg);
       }
-      rank = Math.max(severityRank(limits.fiveHour?.severity), severityRank(limits.sevenDay?.severity));
+      rank = Math.max(
+        severityRank(limits.fiveHour?.severity),
+        severityRank(limits.sevenDay?.severity),
+        opus ? severityRank(opus.severity) : 0
+      );
     }
     if (showCost) {
       parts.push(formatCurrency(summary.costUsd, currency, decimals));
@@ -57,7 +63,7 @@ export class StatusBarController {
   }
 }
 
-function formatLimits(limits: PlanLimits): string {
+function formatLimits(limits: PlanLimits, opus?: LimitWindow): string {
   const segs: string[] = [];
   if (limits.fiveHour) {
     segs.push(`5h ${Math.round(limits.fiveHour.utilization)}%`);
@@ -65,7 +71,14 @@ function formatLimits(limits: PlanLimits): string {
   if (limits.sevenDay) {
     segs.push(`wk ${Math.round(limits.sevenDay.utilization)}%`);
   }
+  if (opus) {
+    segs.push(`opus ${Math.round(opus.utilization)}%`);
+  }
   return segs.join(' · ');
+}
+
+function opusWindow(limits: PlanLimits): ScopedLimit | undefined {
+  return limits.scoped.find((scoped) => /opus/i.test(scoped.label));
 }
 
 function buildTooltip(limits?: PlanLimits): string {
