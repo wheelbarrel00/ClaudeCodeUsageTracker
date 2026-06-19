@@ -1,8 +1,8 @@
 {
   "name": "claude-code-usage-tracker-wb00",
-  "displayName": "Claude Code Usage Tracker Display",
+  "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
