@@ -41,7 +41,14 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
   } catch {
     return undefined;
   }
-  const data = raw?.data;
+  return mapUsageData(raw?.data, num(raw?.fetchedAt));
+}
+
+// Maps the raw usage payload (the `data` object Claude Code writes to
+// usage-cache.json, which is also the body the live /api/oauth/usage endpoint
+// returns) into PlanLimits. Pure and I/O-free so both the cache reader and the
+// live fetcher share one parser.
+export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefined {
   if (!data || typeof data !== 'object') {
     return undefined;
   }
@@ -93,7 +100,7 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
   if (!fiveHour && !sevenDay && scoped.length === 0) {
     return undefined;
   }
-  return { fiveHour, sevenDay, scoped, fetchedAt: num(raw.fetchedAt) };
+  return { fiveHour, sevenDay, scoped, fetchedAt };
 }
 
 // A window whose reset time has passed rolled over while the cache sat stale

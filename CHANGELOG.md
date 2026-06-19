@@ -6,6 +6,24 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-19
+
+### Added
+- Live plan-limit fetching. The extension now reads your current 5-hour and
+  weekly usage directly from Anthropic's usage endpoint — the same call Claude
+  Code makes — authenticated with the OAuth token already in
+  `~/.claude/.credentials.json`. The only previous source was
+  `~/.claude/usage-cache.json`, which Claude Code rewrites just on startup and on
+  `/usage`, so during a long session the limits could sit hours stale. The live
+  fetch keeps them current with no session needed and falls back to the cache
+  file on any failure. Controlled by `claudeCodeUsageTracker.useLiveApi` (default
+  on) and throttled by `claudeCodeUsageTracker.liveApiMinIntervalSeconds`
+  (default 180). Network requests are throttled to that interval whether they
+  succeed or fail, a 429 backs off further (honoring `Retry-After`), and the live
+  call is hard-timed-out so it can never stall the refresh loop. The throttle and
+  token are per editor window. The access token is refreshed in memory only; the
+  credentials file is never modified.
+
 ### Fixed
 - Plan-limit windows whose reset time has already passed are now treated as
   rolled over instead of showing the last cached utilization. `~/.claude/usage-cache.json`

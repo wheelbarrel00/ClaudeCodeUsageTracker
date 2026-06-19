@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -76,6 +76,17 @@
           "type": "boolean",
           "default": true,
           "description": "Show 5-hour and weekly plan-limit utilization in the status bar."
+        },
+        "claudeCodeUsageTracker.useLiveApi": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fetch current plan limits live from Anthropic's usage endpoint (using the OAuth token in ~/.claude/.credentials.json) so they stay accurate even when Claude Code hasn't refreshed its on-disk cache. Falls back to the cache file if the live request fails. Turn off to read only the cache file."
+        },
+        "claudeCodeUsageTracker.liveApiMinIntervalSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 60,
+          "description": "Minimum seconds between live usage-endpoint requests. The status bar still refreshes on its normal interval; this only throttles network calls to the limits API."
         },
         "claudeCodeUsageTracker.showOpusWeekly": {
           "type": "boolean",

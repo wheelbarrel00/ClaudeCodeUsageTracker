@@ -4,6 +4,7 @@ import { StatusBarController } from './statusBar';
 import { Dashboard } from './dashboard';
 import { loadUsageRecords, summarize, filterToday, currentContext, claudeLogRoot, ContextInfo } from './dataLoader';
 import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
+import { fetchLiveLimits } from './usageApi';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -56,7 +57,7 @@ async function refresh(): Promise<void> {
   try {
     do {
       refreshAgain = false;
-      const [records, limits] = await Promise.all([loadUsageRecords(), loadPlanLimits()]);
+      const [records, limits] = await Promise.all([loadUsageRecords(), getPlanLimits()]);
       latestRecords = records;
       latestLimits = limits;
       latestContext = currentContext(records);
@@ -67,6 +68,39 @@ async function refresh(): Promise<void> {
   } finally {
     refreshInFlight = false;
   }
+}
+
+async function getPlanLimits(): Promise<PlanLimits | undefined> {
+  const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  if (cfg.get<boolean>('useLiveApi', true)) {
+    const minInterval = Math.max(60, cfg.get<number>('liveApiMinIntervalSeconds', 180)) * 1000;
+    try {
+      const live = await withTimeout(fetchLiveLimits(minInterval), 30000);
+      if (live) {
+        return live;
+      }
+    } catch {
+      // fall back to the on-disk cache
+    }
+  }
+  return loadPlanLimits();
+}
+
+// Backstop so a stuck live fetch can never leave refreshInFlight wedged.
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('live fetch timed out')), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 function scheduleRefresh(): void {
