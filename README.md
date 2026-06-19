@@ -6,8 +6,8 @@
 
 <p align="center">
   A VS Code / Cursor extension that tracks your Claude Code plan-limit usage,
-  token counts, and estimated cost from your local logs &mdash; in the status
-  bar and a dashboard.
+  context window, token counts, and estimated cost from your local logs &mdash;
+  in the status bar and a dashboard.
 </p>
 
 <p align="center">
@@ -16,26 +16,29 @@
 
 ## Features
 
-- **Status bar** &mdash; plan-limit utilization (5-hour + weekly), today's estimated cost, and token count, always visible. Each segment toggles independently, and the bar tints when Claude flags you as near a limit. Click to open the dashboard.
-- **Plan limits** &mdash; real 5h / weekly usage read from Claude Code's own server-computed cache, with reset times, per-model scoped windows, and an optional weekly-Opus readout.
-- **Dashboard** &mdash; a Plan limits section (bars + reset times) above Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown.
-- **Per-model and per-project breakdowns** &mdash; see where your tokens and spend actually go.
+- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently, and the bar tints when Claude flags you as near a limit. Click to open the dashboard.
+- **Plan limits** &mdash; real 5h / weekly usage read from Claude Code's own server-computed cache, with reset times and per-model scoped windows, shown as bars in the dashboard.
+- **Context window** &mdash; the latest request's prompt size as a percent of the model's window (like `/context`), with 1M-tier detection.
+- **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration).
 - **Live updates** &mdash; file watchers over your logs and the limits cache refresh the moment Claude Code writes, with a timer as a fallback.
 - **Cost estimates** &mdash; from a per-model price table, with prefix matching for dated and suffixed model ids.
 
 ## How it works
 
 Claude Code writes a JSONL transcript per session under `~/.claude/projects`. The
-extension walks those logs, parses each line into a per-message usage record, and
-deduplicates the entries that repeat once per content block. Records are
-aggregated by day, month, and all-time, and grouped by model and project, then
-priced with a per-model rate table.
+extension walks those logs and parses each line into a per-message usage record
+&mdash; capturing model, working directory, git branch, and session id &mdash;
+deduplicating the entries that repeat once per content block. Records are
+aggregated by day, month, and all-time, and grouped by model, project, branch,
+and session, then priced with a per-model rate table.
 
 Plan limits come from a second source: `~/.claude/usage-cache.json`, the live
 cache Claude Code keeps of the server's own limit math. Its 5-hour and weekly
 utilization figures are already 0&ndash;100, so the extension shows them as-is
 (and mirrors the server's severity for the warning tint) rather than inventing
-thresholds of its own.
+thresholds of its own. The context-window figure is the most recent request's
+prompt size (input + cache) over the model's window &mdash; 200K, or 1M when the
+prompt or model marks the long-context tier.
 
 ## Settings
 
@@ -46,8 +49,10 @@ thresholds of its own.
 | `claudeCodeUsageTracker.decimalPlaces` | `2` | Decimal places for cost figures. |
 | `claudeCodeUsageTracker.showLimits` | `true` | Show 5-hour and weekly plan-limit utilization. |
 | `claudeCodeUsageTracker.showOpusWeekly` | `false` | Also append the weekly Opus limit (`opus NN%`) when a live Opus window exists. |
+| `claudeCodeUsageTracker.showContext` | `true` | Show the current session's context-window fill (like `/context`). |
 | `claudeCodeUsageTracker.showCost` | `true` | Show today's estimated cost. |
 | `claudeCodeUsageTracker.showTokens` | `true` | Show today's token count. |
+| `claudeCodeUsageTracker.projectGroupingMode` | `git` | Group the dashboard's By project breakdown by git repo, folder, or path. |
 
 ## Development
 

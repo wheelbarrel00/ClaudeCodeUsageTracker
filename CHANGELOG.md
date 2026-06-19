@@ -15,11 +15,20 @@ aims to follow [Semantic Versioning](https://semver.org).
   tooltip lists each window's reset time and scoped models.
 - `showOpusWeekly` opt-in (default off) that appends the weekly Opus limit
   (`opus Z%`) after the 5h / weekly figures when a live Opus window exists.
+- Context-window fill indicator (`showContext`): the latest request's prompt
+  size as a percent of the model's window, with the 1M tier inferred when the
+  prompt exceeds 200K even if the `[1m]` marker is absent.
 - Dashboard webview: Today / This Month / All Time cards with an input / output
   / cache-write / cache-read token breakdown, plus a Plan limits section with a
   progress bar, reset time, and severity color per window.
-- Per-model and per-project breakdown tables, scoped by a Today / This Month /
-  All Time tab that persists across refreshes.
+- Per-card cache-hit rate and a cost-composition bar splitting cost across
+  input / output / cache-write / cache-read.
+- Sortable breakdown tables (click a column header to sort), scoped by a Today /
+  This Month / All Time tab that persists across refreshes.
+- Breakdowns by model, by project, by git branch, and by session. Project
+  grouping is configurable via `projectGroupingMode` (git repo / folder / path,
+  default git). Sessions show the `ai-title`, peak context, and active-time
+  duration (gaps over 15 minutes are excluded as step-aways).
 - Cost estimates from a per-model price table with prefix matching for dated /
   suffixed model ids.
 - Live updates via file watchers over `~/.claude/projects` and
