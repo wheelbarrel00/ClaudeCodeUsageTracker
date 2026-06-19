@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { UsageRecord, UsageSummary, EMPTY_TOKENS } from './types';
-import { estimateCost } from './pricing';
+import { estimateCost, pricingForModel } from './pricing';
 
 const SYNTHETIC_MODEL = '<synthetic>';
 
@@ -187,6 +187,25 @@ export function summarize(records: UsageRecord[]): UsageSummary {
     costUsd += estimateCost(record.tokens, record.model);
   }
   return { tokens, costUsd, messageCount: records.length };
+}
+
+export interface CostParts {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}
+
+export function costBreakdown(records: UsageRecord[]): CostParts {
+  const parts: CostParts = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+  for (const record of records) {
+    const p = pricingForModel(record.model);
+    parts.input += (record.tokens.input * p.input) / 1_000_000;
+    parts.output += (record.tokens.output * p.output) / 1_000_000;
+    parts.cacheWrite += (record.tokens.cacheWrite * p.cacheWrite) / 1_000_000;
+    parts.cacheRead += (record.tokens.cacheRead * p.cacheRead) / 1_000_000;
+  }
+  return parts;
 }
 
 export function filterToday(records: UsageRecord[]): UsageRecord[] {

@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
-import { UsageRecord, UsageSummary } from './types';
+import { UsageRecord, UsageSummary, TokenCounts } from './types';
 import {
   summarize,
   filterToday,
   filterMonth,
   summarizeByModel,
   summarizeByProject,
+  costBreakdown,
+  CostParts,
   GroupSummary,
 } from './dataLoader';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
@@ -15,6 +17,7 @@ const CONFIG_SECTION = 'claudeCodeUsageTracker';
 interface WindowData {
   title: string;
   summary: UsageSummary;
+  costParts: CostParts;
   byModel: GroupSummary[];
   byProject: GroupSummary[];
 }
@@ -151,6 +154,7 @@ function windowData(title: string, records: UsageRecord[]): WindowData {
   return {
     title,
     summary: summarize(records),
+    costParts: costBreakdown(records),
     byModel: summarizeByModel(records),
     byProject: summarizeByProject(records),
   };
@@ -161,10 +165,11 @@ function card(win: WindowData, money: (value: number) => string): string {
   const total = t.input + t.output + t.cacheWrite + t.cacheRead;
   const row = (label: string, value: number): string =>
     `<tr><td>${label}</td><td class="num">${value.toLocaleString('en-US')}</td></tr>`;
+  const messages = `${win.summary.messageCount.toLocaleString('en-US')} messages · ${Math.round(cacheHitRate(t))}% cache hit`;
   return `    <section class="card">
       <h2>${win.title}</h2>
       <div class="cost">${money(win.summary.costUsd)}</div>
-      <div class="messages">${win.summary.messageCount.toLocaleString('en-US')} messages</div>
+      <div class="messages">${messages}</div>
       <table>
         ${row('Input', t.input)}
         ${row('Output', t.output)}
@@ -172,7 +177,36 @@ function card(win: WindowData, money: (value: number) => string): string {
         ${row('Cache read', t.cacheRead)}
         <tr class="total"><td>Total tokens</td><td class="num">${total.toLocaleString('en-US')}</td></tr>
       </table>
+      ${compositionBar(win.costParts)}
     </section>`;
+}
+
+function cacheHitRate(t: TokenCounts): number {
+  const denom = t.input + t.cacheWrite + t.cacheRead;
+  return denom > 0 ? (t.cacheRead / denom) * 100 : 0;
+}
+
+function compositionBar(parts: CostParts): string {
+  const total = parts.input + parts.output + parts.cacheWrite + parts.cacheRead;
+  if (total <= 0) {
+    return '';
+  }
+  const segs = [
+    { cls: 'seg-input', label: 'Input', value: parts.input },
+    { cls: 'seg-output', label: 'Output', value: parts.output },
+    { cls: 'seg-cw', label: 'Cache write', value: parts.cacheWrite },
+    { cls: 'seg-cr', label: 'Cache read', value: parts.cacheRead },
+  ].map((s) => ({ ...s, pct: (s.value / total) * 100 }));
+  const bar = segs
+    .map((s) => `<span class="seg ${s.cls}" style="width:${s.pct.toFixed(2)}%"></span>`)
+    .join('');
+  const legend = segs
+    .map((s) => `<span class="comp-item"><i class="dot ${s.cls}"></i>${s.label} ${Math.round(s.pct)}%</span>`)
+    .join('');
+  return `<div class="composition" title="Cost by token type">
+        <div class="comp-bar">${bar}</div>
+        <div class="comp-legend">${legend}</div>
+      </div>`;
 }
 
 function breakdownTable(
@@ -219,6 +253,16 @@ function shellHtml(webview: vscode.Webview): string {
     .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin: 0 0 0.5rem; }
     .cost { font-size: 1.8rem; font-weight: 600; }
     .messages { opacity: 0.7; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    .composition { margin-top: 0.7rem; }
+    .comp-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--vscode-panel-border); }
+    .comp-bar .seg { height: 100%; }
+    .seg-input { background: var(--vscode-charts-blue, #4e95d9); }
+    .seg-output { background: var(--vscode-charts-orange, #d9874e); }
+    .seg-cw { background: var(--vscode-charts-purple, #b180d7); }
+    .seg-cr { background: var(--vscode-charts-green, #5db075); }
+    .comp-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.7rem; margin-top: 0.45rem; font-size: 0.72rem; opacity: 0.75; }
+    .comp-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+    .comp-legend .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     td, th { padding: 0.15rem 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -254,8 +298,9 @@ function shellHtml(webview: vscode.Webview): string {
   </div>
   <div id="tables"></div>
   <p class="note">Token counts are dominated by <strong>cache reads</strong> &mdash; the conversation
-  context that is re-read on every request. They are the cheapest token type (about $0.50 per million
-  on Opus), so a large total token figure usually accounts for only a small share of cost.</p>
+  context re-read on every request. Per token they are the cheapest type (about $0.50 per million on
+  Opus), but because the whole context is re-read each turn, the cost-composition bars above show they
+  can still be a sizeable share of total spend.</p>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const saved = vscode.getState();
