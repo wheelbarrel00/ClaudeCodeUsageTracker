@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/logo.png" alt="Claude Code Usage Tracker" width="480" />
+  <img src="images/logo.jpg" alt="Claude Code Usage Tracker" width="480" />
 </p>
 
 <p align="center">

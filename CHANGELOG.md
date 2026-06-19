@@ -6,6 +6,12 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-18
+
+### Changed
+- Replaced the README banner PNG with a smaller JPEG (downscaled to 960px),
+  cutting the packaged extension from ~2 MB to under 600 KB.
+
 ## [1.0.0] - 2026-06-18
 
 ### Added

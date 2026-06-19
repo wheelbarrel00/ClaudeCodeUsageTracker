@@ -12,5 +12,5 @@ tsconfig.json
 CLAUDE.md
 images/**
 !images/stats.png
-!images/logo.png
+!images/logo.jpg
 !images/statusbar.png
