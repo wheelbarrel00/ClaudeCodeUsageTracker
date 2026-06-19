@@ -8,6 +8,7 @@ node_modules/**
 **/*.map
 tsconfig.json
 .git/**
+.claude/**
 *.vsix
 CLAUDE.md
 images/**
