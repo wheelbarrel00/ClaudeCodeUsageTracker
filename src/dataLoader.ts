@@ -92,6 +92,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
 
   const cwd = typeof entry.cwd === 'string' && entry.cwd ? entry.cwd : undefined;
   const session = typeof entry.sessionId === 'string' && entry.sessionId ? entry.sessionId : undefined;
+  const branch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined;
   const record: UsageRecord = {
     timestamp,
     model,
@@ -104,6 +105,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
     project: cwd ? path.basename(cwd) : undefined,
     cwd,
     session,
+    branch,
   };
   return { key, record };
 }
@@ -362,6 +364,32 @@ export function summarizeByProject(records: UsageRecord[], mode = 'git'): GroupS
       }
       return { key: label, summary: summarize(group.records) };
     })
+    .sort((a, b) => b.summary.costUsd - a.summary.costUsd);
+}
+
+export interface BranchSummary {
+  branch: string;
+  project: string;
+  summary: UsageSummary;
+}
+
+export function summarizeByBranch(records: UsageRecord[]): BranchSummary[] {
+  const groups = new Map<string, { branch: string; project: string; records: UsageRecord[] }>();
+  for (const record of records) {
+    if (!record.branch) {
+      continue;
+    }
+    const project = record.project ?? 'unknown';
+    const key = `${project.toLowerCase()} ${record.branch}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.records.push(record);
+    } else {
+      groups.set(key, { branch: record.branch, project, records: [record] });
+    }
+  }
+  return [...groups.values()]
+    .map((group) => ({ branch: group.branch, project: group.project, summary: summarize(group.records) }))
     .sort((a, b) => b.summary.costUsd - a.summary.costUsd);
 }
 

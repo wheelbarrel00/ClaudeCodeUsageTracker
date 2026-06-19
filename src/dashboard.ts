@@ -6,11 +6,13 @@ import {
   filterMonth,
   summarizeByModel,
   summarizeByProject,
+  summarizeByBranch,
   summarizeBySession,
   formatDuration,
   costBreakdown,
   CostParts,
   GroupSummary,
+  BranchSummary,
   SessionSummary,
 } from './dataLoader';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
@@ -23,6 +25,7 @@ interface WindowData {
   costParts: CostParts;
   byModel: GroupSummary[];
   byProject: GroupSummary[];
+  byBranch: BranchSummary[];
   sessions: SessionSummary[];
 }
 
@@ -103,6 +106,7 @@ function buildPayload(
     tables[key] =
       breakdownTable('By model', 'Model', windows[key].byModel, money) +
       breakdownTable('By project', 'Project', windows[key].byProject, money) +
+      branchesTable(windows[key].byBranch, money) +
       sessionsTable(windows[key].sessions, money);
   }
   return { limitsHtml: limitsSection(limits), cardsHtml, tables };
@@ -163,6 +167,7 @@ function windowData(title: string, records: UsageRecord[], groupingMode: string)
     costParts: costBreakdown(records),
     byModel: summarizeByModel(records),
     byProject: summarizeByProject(records, groupingMode),
+    byBranch: summarizeByBranch(records),
     sessions: summarizeBySession(records),
   };
 }
@@ -235,6 +240,26 @@ function breakdownTable(
   return `<h2 class="section">${esc(title)}</h2>
   <table class="breakdown">
     <thead><tr><th class="sortable" data-sortkey="name">${esc(firstColumn)}</th><th class="num sortable" data-sortkey="messages">Messages</th><th class="num sortable" data-sortkey="tokens">Tokens</th><th class="num sortable sorted-desc" data-sortkey="cost">Cost</th></tr></thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>`;
+}
+
+function branchesTable(branches: BranchSummary[], money: (value: number) => string): string {
+  if (branches.length === 0) {
+    return '';
+  }
+  const rows = branches
+    .map((b) => {
+      const t = b.summary.tokens;
+      const tokens = t.input + t.output + t.cacheWrite + t.cacheRead;
+      return `      <tr data-name="${esc(b.branch)}" data-project="${esc(b.project)}" data-messages="${b.summary.messageCount}" data-tokens="${tokens}" data-cost="${b.summary.costUsd}"><td>${esc(b.branch)}</td><td>${esc(b.project)}</td><td class="num">${b.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${tokens.toLocaleString('en-US')}</td><td class="num">${money(b.summary.costUsd)}</td></tr>`;
+    })
+    .join('\n');
+  return `<h2 class="section">By branch</h2>
+  <table class="breakdown">
+    <thead><tr><th class="sortable" data-sortkey="name">Branch</th><th class="sortable" data-sortkey="project">Project</th><th class="num sortable" data-sortkey="messages">Messages</th><th class="num sortable" data-sortkey="tokens">Tokens</th><th class="num sortable sorted-desc" data-sortkey="cost">Cost</th></tr></thead>
     <tbody>
 ${rows}
     </tbody>

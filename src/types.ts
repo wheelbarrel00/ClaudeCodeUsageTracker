@@ -15,6 +15,9 @@ export interface UsageRecord {
   tokens: TokenCounts;
   project?: string;
   cwd?: string;
+  session?: string;
+  sessionTitle?: string;
+  branch?: string;
 }
 
 /** Aggregated usage plus an estimated cost (USD). */
