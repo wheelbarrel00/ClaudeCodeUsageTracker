@@ -222,12 +222,12 @@ function breakdownTable(
     .map((group) => {
       const t = group.summary.tokens;
       const total = t.input + t.output + t.cacheWrite + t.cacheRead;
-      return `      <tr><td>${esc(group.key)}</td><td class="num">${group.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${total.toLocaleString('en-US')}</td><td class="num">${money(group.summary.costUsd)}</td></tr>`;
+      return `      <tr data-name="${esc(group.key)}" data-messages="${group.summary.messageCount}" data-tokens="${total}" data-cost="${group.summary.costUsd}"><td>${esc(group.key)}</td><td class="num">${group.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${total.toLocaleString('en-US')}</td><td class="num">${money(group.summary.costUsd)}</td></tr>`;
     })
     .join('\n');
   return `<h2 class="section">${esc(title)}</h2>
   <table class="breakdown">
-    <thead><tr><th>${esc(firstColumn)}</th><th class="num">Messages</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead>
+    <thead><tr><th class="sortable" data-sortkey="name">${esc(firstColumn)}</th><th class="num sortable" data-sortkey="messages">Messages</th><th class="num sortable" data-sortkey="tokens">Tokens</th><th class="num sortable sorted-desc" data-sortkey="cost">Cost</th></tr></thead>
     <tbody>
 ${rows}
     </tbody>
@@ -269,6 +269,10 @@ function shellHtml(webview: vscode.Webview): string {
     tr.total td { border-top: 1px solid var(--vscode-panel-border); padding-top: 0.35rem; font-weight: 600; }
     table.breakdown th { text-align: left; opacity: 0.7; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.35rem; }
     table.breakdown th.num { text-align: right; }
+    table.breakdown th.sortable { cursor: pointer; user-select: none; }
+    table.breakdown th.sortable:hover { opacity: 1; }
+    table.breakdown th.sorted-asc::after { content: ' ▲'; font-size: 0.7em; }
+    table.breakdown th.sorted-desc::after { content: ' ▼'; font-size: 0.7em; }
     table.breakdown td { padding: 0.25rem 0.75rem 0.25rem 0; }
     .limits { margin: 0 0 1.75rem; }
     .limits h2.section { margin-top: 0; }
@@ -318,6 +322,28 @@ function shellHtml(webview: vscode.Webview): string {
         vscode.setState({ window: sel });
         paint();
       });
+    });
+    tablesEl.addEventListener('click', (event) => {
+      const th = event.target.closest('th.sortable');
+      if (!th || !tablesEl.contains(th)) {
+        return;
+      }
+      const table = th.closest('table');
+      const dir = th.classList.contains('sorted-desc') ? 'asc' : 'desc';
+      table.querySelectorAll('th').forEach((h) => h.classList.remove('sorted-asc', 'sorted-desc'));
+      th.classList.add(dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+      const key = th.dataset.sortkey;
+      const tbody = table.querySelector('tbody');
+      const rows = Array.from(tbody.children);
+      rows.sort((a, b) => {
+        const av = a.dataset[key];
+        const bv = b.dataset[key];
+        const an = parseFloat(av);
+        const bn = parseFloat(bv);
+        const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av).localeCompare(String(bv));
+        return dir === 'asc' ? cmp : -cmp;
+      });
+      rows.forEach((r) => tbody.appendChild(r));
     });
     window.addEventListener('message', (event) => {
       const data = event.data;
