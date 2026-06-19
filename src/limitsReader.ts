@@ -8,6 +8,7 @@ export interface LimitWindow {
   utilization: number;
   resetsAt?: number;
   severity: Severity;
+  stale?: boolean;
 }
 
 export interface ScopedLimit extends LimitWindow {
@@ -20,6 +21,8 @@ export interface PlanLimits {
   scoped: ScopedLimit[];
   fetchedAt?: number;
 }
+
+const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function usageCachePath(): string {
   return path.join(os.homedir(), '.claude', 'usage-cache.json');
@@ -58,8 +61,9 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
     }
   }
 
-  const fiveHour = windowFromLimit(byKind.get('session')) ?? windowFromTop(data.five_hour);
-  const sevenDay = windowFromLimit(byKind.get('weekly_all')) ?? windowFromTop(data.seven_day);
+  const now = Date.now();
+  const fiveHour = applyExpiry(windowFromLimit(byKind.get('session')) ?? windowFromTop(data.five_hour), now, 0);
+  const sevenDay = applyExpiry(windowFromLimit(byKind.get('weekly_all')) ?? windowFromTop(data.seven_day), now, SEVEN_DAY_MS);
 
   const scoped: ScopedLimit[] = [];
   for (const entry of scopedRaw) {
@@ -67,16 +71,23 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
     if (utilization === undefined) {
       continue;
     }
-    scoped.push({
-      label: scopeLabel(entry.scope),
-      utilization: Math.max(0, utilization),
-      resetsAt: parseResetsAt(entry.resets_at),
-      severity: severityOf(entry.severity),
-    });
+    const win = applyExpiry<ScopedLimit>(
+      {
+        label: scopeLabel(entry.scope),
+        utilization: Math.max(0, utilization),
+        resetsAt: parseResetsAt(entry.resets_at),
+        severity: severityOf(entry.severity),
+      },
+      now,
+      SEVEN_DAY_MS
+    );
+    if (win) {
+      scoped.push(win);
+    }
   }
   if (scoped.length === 0) {
-    pushTopScoped(scoped, 'Opus', data.seven_day_opus);
-    pushTopScoped(scoped, 'Sonnet', data.seven_day_sonnet);
+    pushTopScoped(scoped, 'Opus', data.seven_day_opus, now);
+    pushTopScoped(scoped, 'Sonnet', data.seven_day_sonnet, now);
   }
 
   if (!fiveHour && !sevenDay && scoped.length === 0) {
@@ -85,13 +96,56 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
   return { fiveHour, sevenDay, scoped, fetchedAt: num(raw.fetchedAt) };
 }
 
+// A window whose reset time has passed rolled over while the cache sat stale
+// (no active session to refresh it), so the old utilization no longer applies:
+// report a fresh, empty window flagged `stale` so callers can show it as an
+// inference rather than a live reading. rollMs > 0 projects the next weekly
+// boundary (best-effort, assuming a fixed 7-day cadence); rollMs = 0 clears the
+// reset for the usage-anchored 5-hour window, whose next reset is unknown until
+// it is used again.
+function applyExpiry<T extends LimitWindow>(window: T | undefined, now: number, rollMs: number): T | undefined {
+  if (!window || window.resetsAt === undefined || window.resetsAt > now) {
+    return window;
+  }
+  let resetsAt: number | undefined;
+  if (rollMs > 0) {
+    const periods = Math.floor((now - window.resetsAt) / rollMs) + 1;
+    resetsAt = window.resetsAt + periods * rollMs;
+  }
+  return { ...window, utilization: 0, severity: 'normal', resetsAt, stale: true };
+}
+
+export function formatAge(fetchedAt?: number, now = Date.now()): string {
+  if (fetchedAt === undefined) {
+    return '';
+  }
+  const ms = now - fetchedAt;
+  if (ms < 90 * 1000) {
+    return '';
+  }
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+export function formatUtilization(window: LimitWindow): string {
+  return window.stale ? '—' : `${Math.round(window.utilization)}%`;
+}
+
 export function formatReset(resetsAt?: number): string {
   if (resetsAt === undefined) {
     return '';
   }
   const ms = resetsAt - Date.now();
   if (ms <= 0) {
-    return 'resetting now';
+    return ms < -60000 ? '' : 'resetting now';
   }
   const minutes = Math.round(ms / 60000);
   if (minutes < 60) {
@@ -135,10 +189,13 @@ function windowFromTop(raw: any): LimitWindow | undefined {
   };
 }
 
-function pushTopScoped(out: ScopedLimit[], label: string, raw: any): void {
+function pushTopScoped(out: ScopedLimit[], label: string, raw: any, now: number): void {
   const win = windowFromTop(raw);
   if (win) {
-    out.push({ label, ...win });
+    const scoped = applyExpiry<ScopedLimit>({ label, ...win }, now, SEVEN_DAY_MS);
+    if (scoped) {
+      out.push(scoped);
+    }
   }
 }
 

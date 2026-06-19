@@ -6,6 +6,19 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Fixed
+- Plan-limit windows whose reset time has already passed are now treated as
+  rolled over instead of showing the last cached utilization. `~/.claude/usage-cache.json`
+  is only refreshed by Claude Code, so between refreshes an elapsed 5-hour window
+  kept reading e.g. `27%` with a "resetting now" tooltip hours after it reset.
+  Such windows now show `—` (the post-reset usage is unknown from a stale cache)
+  in a muted color, the 5-hour reset is cleared (it is usage-anchored), and
+  weekly/scoped windows roll their reset forward a week.
+- The tooltip and dashboard now show an "Updated X ago" note, so a reading drawn
+  from a stale cache is no longer styled like live data.
+- `formatReset` no longer reports "resetting now" for a reset more than a minute
+  in the past.
+
 ## [1.0.1] - 2026-06-18
 
 ### Changed

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
 import { ContextInfo } from './dataLoader';
-import { PlanLimits, LimitWindow, ScopedLimit, formatReset } from './limitsReader';
+import { PlanLimits, LimitWindow, ScopedLimit, formatReset, formatAge, formatUtilization } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -76,8 +76,10 @@ export class StatusBarController {
       item.hide();
       return;
     }
-    item.text = `${ICON} ${label} ${Math.round(window.utilization)}%`;
-    item.color = severityColor(window.severity);
+    item.text = `${ICON} ${label} ${formatUtilization(window)}`;
+    item.color = window.stale
+      ? new vscode.ThemeColor('descriptionForeground')
+      : severityColor(window.severity);
     item.tooltip = tooltip;
     item.show();
   }
@@ -123,6 +125,10 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
     }
     if (limitLines.length) {
       lines.push('Claude plan limits', ...limitLines);
+      const age = formatAge(limits.fetchedAt);
+      if (age) {
+        lines.push(`Updated ${age}`);
+      }
     }
   }
   if (context) {
@@ -138,7 +144,7 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
 
 function limitLine(label: string, window: LimitWindow): string {
   const reset = formatReset(window.resetsAt);
-  const pct = `${Math.round(window.utilization)}%`;
+  const pct = formatUtilization(window);
   return reset ? `${label}: ${pct}  ·  ${reset}` : `${label}: ${pct}`;
 }
 

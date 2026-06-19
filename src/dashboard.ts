@@ -18,7 +18,7 @@ import {
   SessionSummary,
   TrendBucket,
 } from './dataLoader';
-import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
+import { PlanLimits, LimitWindow, formatReset, formatAge, formatUtilization } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -137,21 +137,22 @@ function limitsSection(limits: PlanLimits | undefined): string {
   if (rows.length === 0) {
     return '';
   }
+  const age = formatAge(limits.fetchedAt);
+  const note = age ? `\n    <div class="limits-age">Updated ${esc(age)}</div>` : '';
   return `<section class="limits">
     <h2 class="section">Plan limits</h2>
     <div class="bars">
 ${rows.join('\n')}
-    </div>
+    </div>${note}
   </section>`;
 }
 
 function barRow(label: string, window: LimitWindow): string {
-  const pct = Math.round(window.utilization);
-  const width = Math.min(100, Math.max(0, pct));
+  const width = Math.min(100, Math.max(0, Math.round(window.utilization)));
   const reset = formatReset(window.resetsAt);
   const sub = reset ? `\n        <div class="bar-sub">${reset}</div>` : '';
   return `      <div class="bar-row">
-        <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
+        <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${esc(formatUtilization(window))}</span></div>
         <div class="bar-track"><div class="bar-fill ${severityClass(window.severity)}" style="width:${width}%"></div></div>${sub}
       </div>`;
 }
@@ -470,6 +471,7 @@ function shellHtml(webview: vscode.Webview): string {
     .bar-fill.warning { background: var(--vscode-charts-yellow, #d7a000); }
     .bar-fill.error { background: var(--vscode-charts-red, #d33); }
     .bar-sub { margin-top: 0.2rem; font-size: 0.78rem; opacity: 0.6; }
+    .limits-age { margin-top: 0.7rem; font-size: 0.78rem; opacity: 0.55; }
     .trend { margin: 1.9rem 0 0; }
     .trend-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
     .trend-head h2.section { margin: 0; }
