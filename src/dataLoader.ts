@@ -91,6 +91,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
   }
 
   const cwd = typeof entry.cwd === 'string' && entry.cwd ? entry.cwd : undefined;
+  const session = typeof entry.sessionId === 'string' && entry.sessionId ? entry.sessionId : undefined;
   const record: UsageRecord = {
     timestamp,
     model,
@@ -102,6 +103,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
     },
     project: cwd ? path.basename(cwd) : undefined,
     cwd,
+    session,
   };
   return { key, record };
 }
@@ -115,6 +117,8 @@ async function parseFile(file: string): Promise<ParsedEntry[]> {
   }
   const entries: ParsedEntry[] = [];
   const seen = new Set<string>();
+  let aiTitle: string | undefined;
+  let lastPrompt: string | undefined;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -124,6 +128,18 @@ async function parseFile(file: string): Promise<ParsedEntry[]> {
     try {
       raw = JSON.parse(trimmed);
     } catch {
+      continue;
+    }
+    if (raw.type === 'ai-title') {
+      if (typeof raw.aiTitle === 'string' && raw.aiTitle) {
+        aiTitle = raw.aiTitle;
+      }
+      continue;
+    }
+    if (raw.type === 'last-prompt') {
+      if (typeof raw.lastPrompt === 'string' && raw.lastPrompt) {
+        lastPrompt = raw.lastPrompt;
+      }
       continue;
     }
     const parsed = parseUsageEntry(raw);
@@ -138,7 +154,18 @@ async function parseFile(file: string): Promise<ParsedEntry[]> {
     }
     entries.push(parsed);
   }
+  const title = aiTitle ?? (lastPrompt ? truncate(lastPrompt, 70) : undefined);
+  if (title) {
+    for (const entry of entries) {
+      entry.record.sessionTitle = title;
+    }
+  }
   return entries;
+}
+
+function truncate(value: string, max: number): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
 export async function loadUsageRecords(): Promise<UsageRecord[]> {
@@ -336,6 +363,98 @@ export function summarizeByProject(records: UsageRecord[], mode = 'git'): GroupS
       return { key: label, summary: summarize(group.records) };
     })
     .sort((a, b) => b.summary.costUsd - a.summary.costUsd);
+}
+
+export interface SessionSummary {
+  session: string;
+  title: string;
+  project: string;
+  startMs: number;
+  endMs: number;
+  activeMs: number;
+  peakContextPct: number;
+  summary: UsageSummary;
+}
+
+// Gaps longer than this are treated as the session being put down and resumed,
+// not active work, so they are excluded from the active-time total.
+const ACTIVE_GAP_MS = 15 * 60 * 1000;
+
+export function summarizeBySession(records: UsageRecord[]): SessionSummary[] {
+  const groups = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    const key = record.session;
+    if (!key) {
+      continue;
+    }
+    const list = groups.get(key);
+    if (list) {
+      list.push(record);
+    } else {
+      groups.set(key, [record]);
+    }
+  }
+  const sessions: SessionSummary[] = [];
+  for (const [session, group] of groups) {
+    let startMs = Infinity;
+    let endMs = -Infinity;
+    let peak = 0;
+    let title: string | undefined;
+    let project: string | undefined;
+    for (const record of group) {
+      startMs = Math.min(startMs, record.timestamp);
+      endMs = Math.max(endMs, record.timestamp);
+      if (!title && record.sessionTitle) {
+        title = record.sessionTitle;
+      }
+      if (!project && record.project) {
+        project = record.project;
+      }
+      const ctx = record.tokens.input + record.tokens.cacheRead + record.tokens.cacheWrite;
+      if (ctx > 0) {
+        peak = Math.max(peak, (ctx / contextWindowFor(record.model, ctx)) * 100);
+      }
+    }
+    const times = group.map((record) => record.timestamp).sort((a, b) => a - b);
+    let activeMs = 0;
+    for (let i = 1; i < times.length; i++) {
+      const gap = times[i] - times[i - 1];
+      if (gap <= ACTIVE_GAP_MS) {
+        activeMs += gap;
+      }
+    }
+    sessions.push({
+      session,
+      title: title ?? formatSessionStart(startMs),
+      project: project ?? 'unknown',
+      startMs,
+      endMs,
+      activeMs,
+      peakContextPct: peak,
+      summary: summarize(group),
+    });
+  }
+  return sessions.sort((a, b) => b.summary.costUsd - a.summary.costUsd);
+}
+
+export function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) {
+    return '<1m';
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function formatSessionStart(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return 'session';
+  }
 }
 
 function groupSummaries(

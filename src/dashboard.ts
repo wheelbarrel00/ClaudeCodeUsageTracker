@@ -6,9 +6,12 @@ import {
   filterMonth,
   summarizeByModel,
   summarizeByProject,
+  summarizeBySession,
+  formatDuration,
   costBreakdown,
   CostParts,
   GroupSummary,
+  SessionSummary,
 } from './dataLoader';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 
@@ -20,6 +23,7 @@ interface WindowData {
   costParts: CostParts;
   byModel: GroupSummary[];
   byProject: GroupSummary[];
+  sessions: SessionSummary[];
 }
 
 export class Dashboard {
@@ -98,7 +102,8 @@ function buildPayload(
   for (const key of order) {
     tables[key] =
       breakdownTable('By model', 'Model', windows[key].byModel, money) +
-      breakdownTable('By project', 'Project', windows[key].byProject, money);
+      breakdownTable('By project', 'Project', windows[key].byProject, money) +
+      sessionsTable(windows[key].sessions, money);
   }
   return { limitsHtml: limitsSection(limits), cardsHtml, tables };
 }
@@ -158,6 +163,7 @@ function windowData(title: string, records: UsageRecord[], groupingMode: string)
     costParts: costBreakdown(records),
     byModel: summarizeByModel(records),
     byProject: summarizeByProject(records, groupingMode),
+    sessions: summarizeBySession(records),
   };
 }
 
@@ -229,6 +235,32 @@ function breakdownTable(
   return `<h2 class="section">${esc(title)}</h2>
   <table class="breakdown">
     <thead><tr><th class="sortable" data-sortkey="name">${esc(firstColumn)}</th><th class="num sortable" data-sortkey="messages">Messages</th><th class="num sortable" data-sortkey="tokens">Tokens</th><th class="num sortable sorted-desc" data-sortkey="cost">Cost</th></tr></thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>`;
+}
+
+const SESSION_LIMIT = 50;
+
+function sessionsTable(sessions: SessionSummary[], money: (value: number) => string): string {
+  if (sessions.length === 0) {
+    return '';
+  }
+  const shown = sessions.slice(0, SESSION_LIMIT);
+  const heading = sessions.length > SESSION_LIMIT ? `Sessions (top ${SESSION_LIMIT} by cost)` : 'Sessions';
+  const rows = shown
+    .map((s) => {
+      const t = s.summary.tokens;
+      const tokens = t.input + t.output + t.cacheWrite + t.cacheRead;
+      const durationMs = s.activeMs;
+      const started = new Date(s.startMs).toLocaleString();
+      return `      <tr data-name="${esc(s.title)}" data-project="${esc(s.project)}" data-messages="${s.summary.messageCount}" data-tokens="${tokens}" data-peak="${s.peakContextPct}" data-cost="${s.summary.costUsd}" data-duration="${durationMs}"><td title="Started ${esc(started)}">${esc(s.title)}</td><td>${esc(s.project)}</td><td class="num">${s.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${tokens.toLocaleString('en-US')}</td><td class="num">${Math.round(s.peakContextPct)}%</td><td class="num">${money(s.summary.costUsd)}</td><td class="num">${formatDuration(durationMs)}</td></tr>`;
+    })
+    .join('\n');
+  return `<h2 class="section">${esc(heading)}</h2>
+  <table class="breakdown">
+    <thead><tr><th class="sortable" data-sortkey="name">Session</th><th class="sortable" data-sortkey="project">Project</th><th class="num sortable" data-sortkey="messages">Messages</th><th class="num sortable" data-sortkey="tokens">Tokens</th><th class="num sortable" data-sortkey="peak">Peak ctx</th><th class="num sortable sorted-desc" data-sortkey="cost">Cost</th><th class="num sortable" data-sortkey="duration">Duration</th></tr></thead>
     <tbody>
 ${rows}
     </tbody>
