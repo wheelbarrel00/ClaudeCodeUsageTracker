@@ -101,6 +101,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
       cacheRead: toCount(usage.cache_read_input_tokens),
     },
     project: cwd ? path.basename(cwd) : undefined,
+    cwd,
   };
   return { key, record };
 }
@@ -250,8 +251,91 @@ export function summarizeByModel(records: UsageRecord[]): GroupSummary[] {
   return groupSummaries(records, (record) => record.model);
 }
 
-export function summarizeByProject(records: UsageRecord[]): GroupSummary[] {
-  return groupSummaries(records, (record) => record.project ?? 'unknown');
+const gitRootCache = new Map<string, string | null>();
+
+function gitRootFor(cwd: string): string | null {
+  const seen: string[] = [];
+  let dir = cwd;
+  for (;;) {
+    if (gitRootCache.has(dir)) {
+      const cached = gitRootCache.get(dir) ?? null;
+      for (const s of seen) {
+        gitRootCache.set(s, cached);
+      }
+      return cached;
+    }
+    seen.push(dir);
+    let isRepo = false;
+    try {
+      isRepo = fs.existsSync(path.join(dir, '.git'));
+    } catch {
+      isRepo = false;
+    }
+    if (isRepo) {
+      for (const s of seen) {
+        gitRootCache.set(s, dir);
+      }
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      for (const s of seen) {
+        gitRootCache.set(s, null);
+      }
+      return null;
+    }
+    dir = parent;
+  }
+}
+
+function normalizeKey(p: string): string {
+  return p.toLowerCase().replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+}
+
+function projectGroup(record: UsageRecord, mode: string): { key: string; label: string; path?: string } {
+  const cwd = record.cwd;
+  if (!cwd) {
+    const name = record.project ?? 'unknown';
+    return { key: name.toLowerCase(), label: name };
+  }
+  if (mode === 'flat') {
+    return { key: normalizeKey(cwd), label: path.basename(cwd), path: cwd };
+  }
+  if (mode === 'git') {
+    const root = gitRootFor(cwd) ?? cwd;
+    return { key: normalizeKey(root), label: path.basename(root), path: root };
+  }
+  const base = path.basename(cwd);
+  return { key: base.toLowerCase(), label: base };
+}
+
+export function summarizeByProject(records: UsageRecord[], mode = 'git'): GroupSummary[] {
+  const groups = new Map<string, { label: string; path?: string; records: UsageRecord[] }>();
+  for (const record of records) {
+    const { key, label, path: groupPath } = projectGroup(record, mode);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.records.push(record);
+    } else {
+      groups.set(key, { label, path: groupPath, records: [record] });
+    }
+  }
+  const labelCounts = new Map<string, number>();
+  for (const group of groups.values()) {
+    labelCounts.set(group.label, (labelCounts.get(group.label) ?? 0) + 1);
+  }
+  return [...groups.values()]
+    .map((group) => {
+      let label = group.label;
+      if ((labelCounts.get(group.label) ?? 0) > 1 && group.path) {
+        const parent = path.basename(path.dirname(group.path));
+        if (parent) {
+          label = `${group.label} (${parent})`;
+        }
+      }
+      return { key: label, summary: summarize(group.records) };
+    })
+    .sort((a, b) => b.summary.costUsd - a.summary.costUsd);
 }
 
 function groupSummaries(

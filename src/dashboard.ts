@@ -84,12 +84,13 @@ function buildPayload(
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
+  const groupingMode = cfg.get<string>('projectGroupingMode', 'git');
   const money = (value: number): string => formatCurrency(value, currency, decimals);
 
   const windows: Record<string, WindowData> = {
-    today: windowData('Today', filterToday(records)),
-    month: windowData('This Month', filterMonth(records)),
-    all: windowData('All Time', records),
+    today: windowData('Today', filterToday(records), groupingMode),
+    month: windowData('This Month', filterMonth(records), groupingMode),
+    all: windowData('All Time', records, groupingMode),
   };
   const order = ['today', 'month', 'all'];
   const cardsHtml = order.map((key) => card(windows[key], money)).join('\n');
@@ -150,13 +151,13 @@ function severityClass(severity: string): string {
   }
 }
 
-function windowData(title: string, records: UsageRecord[]): WindowData {
+function windowData(title: string, records: UsageRecord[], groupingMode: string): WindowData {
   return {
     title,
     summary: summarize(records),
     costParts: costBreakdown(records),
     byModel: summarizeByModel(records),
-    byProject: summarizeByProject(records),
+    byProject: summarizeByProject(records, groupingMode),
   };
 }
 

@@ -32,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
         statusBar.render(latest, latestLimits, latestContext);
+        dashboard.update(latestRecords, latestLimits);
         scheduleRefresh();
       }
     })

@@ -63,6 +63,17 @@
           "default": true,
           "description": "Show the current session's context-window fill (like /context) in the status bar."
         },
+        "claudeCodeUsageTracker.projectGroupingMode": {
+          "type": "string",
+          "enum": ["git", "folder", "flat"],
+          "enumDescriptions": [
+            "Group by the enclosing git repository.",
+            "Group by folder name.",
+            "List every working directory separately."
+          ],
+          "default": "git",
+          "description": "How the dashboard's By project breakdown groups working directories."
+        },
         "claudeCodeUsageTracker.showCost": {
           "type": "boolean",
           "default": true,

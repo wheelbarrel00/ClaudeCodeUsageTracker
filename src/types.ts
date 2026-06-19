@@ -14,6 +14,7 @@ export interface UsageRecord {
   model: string;
   tokens: TokenCounts;
   project?: string;
+  cwd?: string;
 }
 
 /** Aggregated usage plus an estimated cost (USD). */
