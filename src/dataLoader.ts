@@ -11,6 +11,15 @@ export interface GroupSummary {
   summary: UsageSummary;
 }
 
+export interface ContextInfo {
+  tokens: number;
+  windowTokens: number;
+  model: string;
+  percent: number;
+}
+
+const CONTEXT_RECENCY_MS = 5 * 60 * 60 * 1000;
+
 interface ParsedEntry {
   key: string;
   record: UsageRecord;
@@ -191,6 +200,31 @@ export function filterMonth(records: UsageRecord[]): UsageRecord[] {
   const now = new Date();
   const startMs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   return records.filter((record) => record.timestamp >= startMs);
+}
+
+// Logs sometimes drop the [1m] marker, so a prompt larger than the base
+// window is itself proof of the 1M tier.
+function contextWindowFor(model: string, tokens: number): number {
+  return model.includes('[1m]') || tokens > 200_000 ? 1_000_000 : 200_000;
+}
+
+export function currentContext(records: UsageRecord[], now = Date.now()): ContextInfo | undefined {
+  let latest: UsageRecord | undefined;
+  for (const record of records) {
+    const tokens = record.tokens.input + record.tokens.cacheRead + record.tokens.cacheWrite;
+    if (tokens <= 0) {
+      continue;
+    }
+    if (!latest || record.timestamp > latest.timestamp) {
+      latest = record;
+    }
+  }
+  if (!latest || now - latest.timestamp > CONTEXT_RECENCY_MS) {
+    return undefined;
+  }
+  const tokens = latest.tokens.input + latest.tokens.cacheRead + latest.tokens.cacheWrite;
+  const windowTokens = contextWindowFor(latest.model, tokens);
+  return { tokens, windowTokens, model: latest.model, percent: (tokens / windowTokens) * 100 };
 }
 
 export function summarizeByModel(records: UsageRecord[]): GroupSummary[] {

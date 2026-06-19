@@ -58,6 +58,11 @@
           "default": false,
           "description": "Also show the weekly Opus limit (opus NN%) in the status bar, after the 5-hour and weekly figures. Requires Show Limits and a live weekly-Opus window."
         },
+        "claudeCodeUsageTracker.showContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current session's context-window fill (like /context) in the status bar."
+        },
         "claudeCodeUsageTracker.showCost": {
           "type": "boolean",
           "default": true,

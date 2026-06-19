@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
+import { ContextInfo } from './dataLoader';
 import { PlanLimits, LimitWindow, ScopedLimit, formatReset } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -17,10 +18,11 @@ export class StatusBarController {
   }
 
   /** Render a usage summary, honouring the user's display settings. */
-  render(summary: UsageSummary, limits?: PlanLimits): void {
+  render(summary: UsageSummary, limits?: PlanLimits, context?: ContextInfo): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const showLimits = cfg.get<boolean>('showLimits', true);
     const showOpusWeekly = cfg.get<boolean>('showOpusWeekly', false);
+    const showContext = cfg.get<boolean>('showContext', true);
     const showCost = cfg.get<boolean>('showCost', true);
     const showTokens = cfg.get<boolean>('showTokens', true);
     const decimals = cfg.get<number>('decimalPlaces', 2);
@@ -40,6 +42,9 @@ export class StatusBarController {
         opus ? severityRank(opus.severity) : 0
       );
     }
+    if (showContext && context) {
+      parts.push(`ctx ${Math.round(context.percent)}%`);
+    }
     if (showCost) {
       parts.push(formatCurrency(summary.costUsd, currency, decimals));
     }
@@ -55,7 +60,7 @@ export class StatusBarController {
         : rank >= 1
         ? new vscode.ThemeColor('statusBarItem.warningBackground')
         : undefined;
-    this.item.tooltip = showLimits ? buildTooltip(limits) : 'Claude Code Usage Tracker';
+    this.item.tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined);
   }
 
   dispose(): void {
@@ -81,21 +86,32 @@ function opusWindow(limits: PlanLimits): ScopedLimit | undefined {
   return limits.scoped.find((scoped) => /opus/i.test(scoped.label));
 }
 
-function buildTooltip(limits?: PlanLimits): string {
-  if (!limits) {
-    return 'Claude Code Usage Tracker';
+function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
+  const lines: string[] = [];
+  if (limits) {
+    const limitLines: string[] = [];
+    if (limits.fiveHour) {
+      limitLines.push(limitLine('5h', limits.fiveHour));
+    }
+    if (limits.sevenDay) {
+      limitLines.push(limitLine('Week', limits.sevenDay));
+    }
+    for (const scoped of limits.scoped) {
+      limitLines.push(limitLine(scoped.label, scoped));
+    }
+    if (limitLines.length) {
+      lines.push('Claude plan limits', ...limitLines);
+    }
   }
-  const lines = ['Claude plan limits'];
-  if (limits.fiveHour) {
-    lines.push(limitLine('5h', limits.fiveHour));
+  if (context) {
+    if (lines.length) {
+      lines.push('');
+    }
+    lines.push(
+      `Context: ${Math.round(context.percent)}%  ·  ${context.tokens.toLocaleString('en-US')} / ${context.windowTokens.toLocaleString('en-US')} tokens`
+    );
   }
-  if (limits.sevenDay) {
-    lines.push(limitLine('Week', limits.sevenDay));
-  }
-  for (const scoped of limits.scoped) {
-    lines.push(limitLine(scoped.label, scoped));
-  }
-  return lines.length > 1 ? lines.join('\n') : 'Claude Code Usage Tracker';
+  return lines.length ? lines.join('\n') : 'Claude Code Usage Tracker';
 }
 
 function limitLine(label: string, window: LimitWindow): string {

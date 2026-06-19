@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { StatusBarController } from './statusBar';
 import { Dashboard } from './dashboard';
-import { loadUsageRecords, summarize, filterToday, claudeLogRoot } from './dataLoader';
+import { loadUsageRecords, summarize, filterToday, currentContext, claudeLogRoot, ContextInfo } from './dataLoader';
 import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
@@ -17,6 +17,7 @@ let refreshAgain = false;
 let latest: UsageSummary = emptySummary();
 let latestRecords: UsageRecord[] = [];
 let latestLimits: PlanLimits | undefined;
+let latestContext: ContextInfo | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBarController();
@@ -30,7 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords, latestLimits)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
-        statusBar.render(latest, latestLimits);
+        statusBar.render(latest, latestLimits, latestContext);
         scheduleRefresh();
       }
     })
@@ -57,8 +58,9 @@ async function refresh(): Promise<void> {
       const [records, limits] = await Promise.all([loadUsageRecords(), loadPlanLimits()]);
       latestRecords = records;
       latestLimits = limits;
+      latestContext = currentContext(records);
       latest = summarize(filterToday(records));
-      statusBar.render(latest, latestLimits);
+      statusBar.render(latest, latestLimits, latestContext);
       dashboard.update(latestRecords, latestLimits);
     } while (refreshAgain);
   } finally {
