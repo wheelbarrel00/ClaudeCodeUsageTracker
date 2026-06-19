@@ -6,6 +6,8 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-18
+
 ### Added
 - Status-bar item showing today's estimated cost and token count, with
   independent `showCost` / `showTokens` toggles. Click to open the dashboard.
