@@ -4,17 +4,29 @@ import { ContextInfo } from './dataLoader';
 import { PlanLimits, LimitWindow, ScopedLimit, formatReset } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
+const ICON = '$(ccut-claude)';
 
 /** Owns the status-bar presentation for the extension. */
 export class StatusBarController {
-  private readonly item: vscode.StatusBarItem;
+  private readonly fiveHour: vscode.StatusBarItem;
+  private readonly weekly: vscode.StatusBarItem;
+  private readonly opus: vscode.StatusBarItem;
+  private readonly main: vscode.StatusBarItem;
 
   constructor() {
-    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.item.command = `${CONFIG_SECTION}.showDashboard`;
-    this.item.tooltip = 'Claude Code Usage Tracker';
-    this.item.text = '$(graph) Claude usage';
-    this.item.show();
+    this.fiveHour = this.createItem(104);
+    this.weekly = this.createItem(103);
+    this.opus = this.createItem(102);
+    this.main = this.createItem(101);
+    this.main.text = `${ICON} Claude usage`;
+    this.main.show();
+  }
+
+  private createItem(priority: number): vscode.StatusBarItem {
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, priority);
+    item.command = `${CONFIG_SECTION}.showDashboard`;
+    item.tooltip = 'Claude Code Usage Tracker';
+    return item;
   }
 
   /** Render a usage summary, honouring the user's display settings. */
@@ -28,20 +40,14 @@ export class StatusBarController {
     const decimals = cfg.get<number>('decimalPlaces', 2);
     const currency = cfg.get<string>('currency', 'USD');
 
+    const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined);
+
+    const live = showLimits ? limits : undefined;
+    this.renderLimit(this.fiveHour, '5h', live?.fiveHour, tooltip);
+    this.renderLimit(this.weekly, 'wk', live?.sevenDay, tooltip);
+    this.renderLimit(this.opus, 'opus', showOpusWeekly && live ? opusWindow(live) : undefined, tooltip);
+
     const parts: string[] = [];
-    let rank = 0;
-    if (showLimits && limits) {
-      const opus = showOpusWeekly ? opusWindow(limits) : undefined;
-      const seg = formatLimits(limits, opus);
-      if (seg) {
-        parts.push(seg);
-      }
-      rank = Math.max(
-        severityRank(limits.fiveHour?.severity),
-        severityRank(limits.sevenDay?.severity),
-        opus ? severityRank(opus.severity) : 0
-      );
-    }
     if (showContext && context) {
       parts.push(`ctx ${Math.round(context.percent)}%`);
     }
@@ -51,39 +57,55 @@ export class StatusBarController {
     if (showTokens) {
       parts.push(`${formatTokens(totalTokens(summary))} tok`);
     }
+    if (parts.length) {
+      this.main.text = parts.join('  ');
+      this.main.tooltip = tooltip;
+      this.main.show();
+    } else {
+      this.main.hide();
+    }
+  }
 
-    const icon = rank >= 2 ? '$(error)' : rank >= 1 ? '$(warning)' : '$(graph)';
-    this.item.text = `${icon} ${parts.join('  ') || 'Claude usage'}`;
-    this.item.backgroundColor =
-      rank >= 2
-        ? new vscode.ThemeColor('statusBarItem.errorBackground')
-        : rank >= 1
-        ? new vscode.ThemeColor('statusBarItem.warningBackground')
-        : undefined;
-    this.item.tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined);
+  private renderLimit(
+    item: vscode.StatusBarItem,
+    label: string,
+    window: LimitWindow | undefined,
+    tooltip: string
+  ): void {
+    if (!window) {
+      item.hide();
+      return;
+    }
+    item.text = `${ICON} ${label} ${Math.round(window.utilization)}%`;
+    item.color = severityColor(window.severity);
+    item.tooltip = tooltip;
+    item.show();
   }
 
   dispose(): void {
-    this.item.dispose();
+    this.fiveHour.dispose();
+    this.weekly.dispose();
+    this.opus.dispose();
+    this.main.dispose();
   }
-}
-
-function formatLimits(limits: PlanLimits, opus?: LimitWindow): string {
-  const segs: string[] = [];
-  if (limits.fiveHour) {
-    segs.push(`5h ${Math.round(limits.fiveHour.utilization)}%`);
-  }
-  if (limits.sevenDay) {
-    segs.push(`wk ${Math.round(limits.sevenDay.utilization)}%`);
-  }
-  if (opus) {
-    segs.push(`opus ${Math.round(opus.utilization)}%`);
-  }
-  return segs.join(' · ');
 }
 
 function opusWindow(limits: PlanLimits): ScopedLimit | undefined {
   return limits.scoped.find((scoped) => /opus/i.test(scoped.label));
+}
+
+function severityColor(severity?: string): vscode.ThemeColor | undefined {
+  switch (severity) {
+    case 'critical':
+    case 'error':
+      return new vscode.ThemeColor('charts.red');
+    case 'warning':
+      return new vscode.ThemeColor('charts.yellow');
+    case 'normal':
+      return new vscode.ThemeColor('charts.green');
+    default:
+      return undefined;
+  }
 }
 
 function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
@@ -118,19 +140,6 @@ function limitLine(label: string, window: LimitWindow): string {
   const reset = formatReset(window.resetsAt);
   const pct = `${Math.round(window.utilization)}%`;
   return reset ? `${label}: ${pct}  ·  ${reset}` : `${label}: ${pct}`;
-}
-
-function severityRank(severity?: string): number {
-  switch (severity) {
-    case 'critical':
-    case 'error':
-      return 2;
-    case undefined:
-    case 'normal':
-      return 0;
-    default:
-      return 1;
-  }
 }
 
 function totalTokens(summary: UsageSummary): number {

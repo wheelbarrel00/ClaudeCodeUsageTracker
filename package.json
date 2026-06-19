@@ -4,19 +4,43 @@
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
   "version": "0.0.1",
   "publisher": "wheelbarrel00",
-  "author": { "name": "Wheelbarrel00" },
+  "author": {
+    "name": "Wheelbarrel00"
+  },
   "license": "MIT",
   "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/wheelbarrel00/ClaudeCodeUsageTracker.git"
   },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other", "Visualization"],
-  "keywords": ["claude", "claude code", "usage", "cost", "tokens"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "usage",
+    "cost",
+    "tokens"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "icons": {
+      "ccut-claude": {
+        "description": "Claude sunburst",
+        "default": {
+          "fontPath": "./media/ccut.woff",
+          "fontCharacter": "\\E000"
+        }
+      }
+    },
     "commands": [
       {
         "command": "claudeCodeUsageTracker.showDashboard",
@@ -65,7 +89,11 @@
         },
         "claudeCodeUsageTracker.projectGroupingMode": {
           "type": "string",
-          "enum": ["git", "folder", "flat"],
+          "enum": [
+            "git",
+            "folder",
+            "flat"
+          ],
           "enumDescriptions": [
             "Group by the enclosing git repository.",
             "Group by folder name.",
@@ -90,11 +118,15 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "gen:icons": "node scripts/gen-icons.js"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@types/vscode": "^1.85.0",
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^16.0.0",
+    "ttf2woff": "^3.0.0",
     "typescript": "^5.4.5"
   }
 }

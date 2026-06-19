@@ -16,7 +16,7 @@
 
 ## Features
 
-- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently, and the bar tints when Claude flags you as near a limit. Click to open the dashboard.
+- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), each led by a Claude sunburst that turns green / yellow / red as Claude flags that window, plus the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently. Click to open the dashboard.
 - **Plan limits** &mdash; real 5h / weekly usage read from Claude Code's own server-computed cache, with reset times and per-model scoped windows, shown as bars in the dashboard.
 - **Context window** &mdash; the latest request's prompt size as a percent of the model's window (like `/context`), with 1M-tier detection.
 - **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration).

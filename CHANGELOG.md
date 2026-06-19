@@ -11,8 +11,12 @@ aims to follow [Semantic Versioning](https://semver.org).
   independent `showCost` / `showTokens` toggles. Click to open the dashboard.
 - Plan-limit utilization in the status bar: 5-hour and weekly windows
   (`5h X% · wk Y%`) read from Claude Code's `~/.claude/usage-cache.json`, gated
-  on `showLimits`. The bar tints to the server-reported severity, and the
-  tooltip lists each window's reset time and scoped models.
+  on `showLimits`. The tooltip lists each window's reset time and scoped models.
+- Each plan-limit segment leads with a bundled Claude sunburst icon (an icon
+  font) colored by the server's severity for that window &mdash; green (normal),
+  yellow (warning), red (critical) &mdash; replacing the earlier whole-bar
+  background tint. The limits, context, and cost/tokens now sit in separate
+  status-bar items.
 - `showOpusWeekly` opt-in (default off) that appends the weekly Opus limit
   (`opus Z%`) after the 5h / weekly figures when a live Opus window exists.
 - Context-window fill indicator (`showContext`): the latest request's prompt
