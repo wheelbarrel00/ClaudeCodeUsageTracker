@@ -8,12 +8,15 @@ import {
   summarizeByProject,
   summarizeByBranch,
   summarizeBySession,
+  summarizeDaily,
+  summarizeMonthly,
   formatDuration,
   costBreakdown,
   CostParts,
   GroupSummary,
   BranchSummary,
   SessionSummary,
+  TrendBucket,
 } from './dataLoader';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 
@@ -84,10 +87,15 @@ export class Dashboard {
   }
 }
 
+interface ChartSet {
+  daily: { cost: string; tokens: string };
+  monthly: { cost: string; tokens: string };
+}
+
 function buildPayload(
   records: UsageRecord[],
   limits: PlanLimits | undefined
-): { limitsHtml: string; cardsHtml: string; tables: Record<string, string> } {
+): { limitsHtml: string; cardsHtml: string; charts: ChartSet; tables: Record<string, string> } {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
@@ -109,7 +117,7 @@ function buildPayload(
       branchesTable(windows[key].byBranch, money) +
       sessionsTable(windows[key].sessions, money);
   }
-  return { limitsHtml: limitsSection(limits), cardsHtml, tables };
+  return { limitsHtml: limitsSection(limits), cardsHtml, charts: chartSet(records, money), tables };
 }
 
 function limitsSection(limits: PlanLimits | undefined): string {
@@ -292,6 +300,126 @@ ${rows}
   </table>`;
 }
 
+type Period = 'daily' | 'monthly';
+type Metric = 'cost' | 'tokens';
+
+function chartSet(records: UsageRecord[], money: (value: number) => string): ChartSet {
+  const daily = summarizeDaily(records);
+  const monthly = summarizeMonthly(records);
+  return {
+    daily: {
+      cost: chartHtml(daily, 'daily', 'cost', money),
+      tokens: chartHtml(daily, 'daily', 'tokens', money),
+    },
+    monthly: {
+      cost: chartHtml(monthly, 'monthly', 'cost', money),
+      tokens: chartHtml(monthly, 'monthly', 'tokens', money),
+    },
+  };
+}
+
+function bucketValue(bucket: TrendBucket, metric: Metric): number {
+  if (metric === 'cost') {
+    return bucket.summary.costUsd;
+  }
+  const t = bucket.summary.tokens;
+  return t.input + t.output + t.cacheWrite + t.cacheRead;
+}
+
+function chartHtml(
+  buckets: TrendBucket[],
+  period: Period,
+  metric: Metric,
+  money: (value: number) => string
+): string {
+  if (buckets.length === 0) {
+    return '<div class="chart-empty">No usage in this range yet.</div>';
+  }
+  const fmt = (value: number): string => (metric === 'cost' ? money(value) : `${compactTokens(value)} tok`);
+  const values = buckets.map((bucket) => bucketValue(bucket, metric));
+  const max = Math.max(...values, 0);
+  const cols = buckets
+    .map((bucket, i) => {
+      const value = values[i];
+      const height = max > 0 ? (value / max) * 100 : 0;
+      const label = period === 'daily' ? dayLabel(bucket.startMs, i === 0) : monthLabel(bucket.startMs, i === 0);
+      const full = period === 'daily' ? fullDay(bucket.startMs) : fullMonth(bucket.startMs);
+      const today = period === 'daily' && isToday(bucket.startMs) ? ' today' : '';
+      return `      <div class="col${today}" title="${esc(full)} — ${esc(fmt(value))}">
+        <div class="col-track"><div class="col-fill" style="height:${height.toFixed(1)}%"></div></div>
+        <div class="col-label">${esc(label)}</div>
+      </div>`;
+    })
+    .join('\n');
+  let summary = '';
+  if (max > 0) {
+    const total = values.reduce((sum, value) => sum + value, 0);
+    const peak = buckets[values.indexOf(max)];
+    const when = period === 'daily' ? fullDay(peak.startMs) : fullMonth(peak.startMs);
+    const unit = period === 'daily' ? 'day' : 'month';
+    const plural = buckets.length === 1 ? '' : 's';
+    summary = `Total ${esc(fmt(total))} · peak ${esc(fmt(max))} (${esc(when)}) · ${buckets.length} ${unit}${plural}`;
+  }
+  return `<div class="chart-summary">${summary}</div>
+    <div class="chart-bars ${metric}">
+${cols}
+    </div>`;
+}
+
+function dayLabel(ms: number, first: boolean): string {
+  const date = new Date(ms);
+  const day = date.getDate();
+  if (first || day === 1 || day % 5 === 0 || isToday(ms)) {
+    return String(day);
+  }
+  return '';
+}
+
+function monthLabel(ms: number, first: boolean): string {
+  const date = new Date(ms);
+  const month = date.toLocaleDateString('en-US', { month: 'short' });
+  if (first || date.getMonth() === 0) {
+    return `${month} ’${String(date.getFullYear()).slice(-2)}`;
+  }
+  return month;
+}
+
+function fullDay(ms: number): string {
+  return new Date(ms).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function fullMonth(ms: number): string {
+  return new Date(ms).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function isToday(ms: number): boolean {
+  const date = new Date(ms);
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function compactTokens(value: number): string {
+  if (value >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(1)}B`;
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return String(Math.round(value));
+}
+
 function shellHtml(webview: vscode.Webview): string {
   const nonce = makeNonce();
   const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';`;
@@ -342,6 +470,23 @@ function shellHtml(webview: vscode.Webview): string {
     .bar-fill.warning { background: var(--vscode-charts-yellow, #d7a000); }
     .bar-fill.error { background: var(--vscode-charts-red, #d33); }
     .bar-sub { margin-top: 0.2rem; font-size: 0.78rem; opacity: 0.6; }
+    .trend { margin: 1.9rem 0 0; }
+    .trend-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+    .trend-head h2.section { margin: 0; }
+    .switchers { display: flex; gap: 0.5rem; }
+    .switch { display: inline-flex; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: hidden; }
+    .switch button { font: inherit; font-size: 0.78rem; color: var(--vscode-foreground); background: transparent; border: 0; padding: 0.25rem 0.7rem; cursor: pointer; }
+    .switch button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .switch button.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+    .chart-summary { font-size: 0.8rem; opacity: 0.7; margin: 0.6rem 0; min-height: 1rem; }
+    .chart-bars { display: flex; align-items: stretch; gap: 3px; height: 150px; }
+    .col { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+    .col-track { flex: 1; width: 100%; display: flex; align-items: flex-end; min-height: 0; }
+    .col-fill { width: 100%; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--vscode-charts-blue, #4e95d9); }
+    .chart-bars.tokens .col-fill { background: var(--vscode-charts-purple, #b180d7); }
+    .col.today .col-fill { outline: 1px solid var(--vscode-foreground); outline-offset: -1px; }
+    .col-label { font-size: 0.62rem; opacity: 0.55; margin-top: 0.3rem; height: 0.9rem; line-height: 0.9rem; white-space: nowrap; overflow: hidden; }
+    .chart-empty { opacity: 0.6; font-size: 0.85rem; padding: 1.5rem 0; }
     .tabs { display: flex; gap: 0.4rem; margin: 1.75rem 0 0.25rem; }
     .tabs button { font: inherit; color: var(--vscode-foreground); background: transparent; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 0.3rem 0.8rem; cursor: pointer; }
     .tabs button:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -353,6 +498,22 @@ function shellHtml(webview: vscode.Webview): string {
   <h1>Claude Code Usage</h1>
   <div id="limits"></div>
   <div id="cards" class="grid"></div>
+  <section class="trend">
+    <div class="trend-head">
+      <h2 class="section">Trend</h2>
+      <div class="switchers">
+        <div class="switch" id="trend-period">
+          <button data-period="daily">Daily</button>
+          <button data-period="monthly">Monthly</button>
+        </div>
+        <div class="switch" id="trend-metric">
+          <button data-metric="cost">Cost</button>
+          <button data-metric="tokens">Tokens</button>
+        </div>
+      </div>
+    </div>
+    <div id="chart"></div>
+  </section>
   <div class="tabs" id="tabs">
     <button data-window="today">Today</button>
     <button data-window="month">This Month</button>
@@ -365,20 +526,48 @@ function shellHtml(webview: vscode.Webview): string {
   can still be a sizeable share of total spend.</p>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const saved = vscode.getState();
-    let sel = (saved && saved.window) || 'all';
+    const saved = vscode.getState() || {};
+    let sel = saved.window || 'all';
+    let period = saved.period || 'daily';
+    let metric = saved.metric || 'cost';
     let tables = null;
+    let charts = null;
     const tablesEl = document.getElementById('tables');
-    const buttons = Array.from(document.querySelectorAll('#tabs button'));
+    const chartEl = document.getElementById('chart');
+    const tabButtons = Array.from(document.querySelectorAll('#tabs button'));
+    const periodButtons = Array.from(document.querySelectorAll('#trend-period button'));
+    const metricButtons = Array.from(document.querySelectorAll('#trend-metric button'));
+    function saveState() {
+      vscode.setState({ window: sel, period: period, metric: metric });
+    }
     function paint() {
       tablesEl.innerHTML = tables ? (tables[sel] || '') : '';
-      buttons.forEach((b) => b.classList.toggle('active', b.dataset.window === sel));
+      tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.window === sel));
     }
-    buttons.forEach((b) => {
+    function paintChart() {
+      chartEl.innerHTML = charts && charts[period] ? (charts[period][metric] || '') : '';
+      periodButtons.forEach((b) => b.classList.toggle('active', b.dataset.period === period));
+      metricButtons.forEach((b) => b.classList.toggle('active', b.dataset.metric === metric));
+    }
+    tabButtons.forEach((b) => {
       b.addEventListener('click', () => {
         sel = b.dataset.window;
-        vscode.setState({ window: sel });
+        saveState();
         paint();
+      });
+    });
+    periodButtons.forEach((b) => {
+      b.addEventListener('click', () => {
+        period = b.dataset.period;
+        saveState();
+        paintChart();
+      });
+    });
+    metricButtons.forEach((b) => {
+      b.addEventListener('click', () => {
+        metric = b.dataset.metric;
+        saveState();
+        paintChart();
       });
     });
     tablesEl.addEventListener('click', (event) => {
@@ -407,7 +596,9 @@ function shellHtml(webview: vscode.Webview): string {
       const data = event.data;
       document.getElementById('limits').innerHTML = data.limitsHtml || '';
       document.getElementById('cards').innerHTML = data.cardsHtml;
+      charts = data.charts;
       tables = data.tables;
+      paintChart();
       paint();
     });
     vscode.postMessage({ type: 'ready' });

@@ -33,6 +33,11 @@ aims to follow [Semantic Versioning](https://semver.org).
   grouping is configurable via `projectGroupingMode` (git repo / folder / path,
   default git). Sessions show the `ai-title`, peak context, and active-time
   duration (gaps over 15 minutes are excluded as step-aways).
+- A Trend bar chart of usage over time: daily bars across the current month or
+  monthly bars across all time, with a cost / tokens metric switcher, the current
+  day highlighted, and a total + peak summary line. Empty days/months are filled
+  so gaps in usage are visible. Period and metric selections persist across
+  refreshes.
 - Cost estimates from a per-model price table with prefix matching for dated /
   suffixed model ids.
 - Live updates via file watchers over `~/.claude/projects` and

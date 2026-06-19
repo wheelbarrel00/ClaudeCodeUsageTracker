@@ -251,6 +251,74 @@ export function filterMonth(records: UsageRecord[]): UsageRecord[] {
   return records.filter((record) => record.timestamp >= startMs);
 }
 
+export interface TrendBucket {
+  key: string;
+  startMs: number;
+  summary: UsageSummary;
+}
+
+function pad2(value: number): string {
+  return value < 10 ? `0${value}` : String(value);
+}
+
+function dayKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function monthKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
+}
+
+function bucketBy(records: UsageRecord[], keyOf: (date: Date) => string): Map<string, UsageRecord[]> {
+  const buckets = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    const key = keyOf(new Date(record.timestamp));
+    const list = buckets.get(key);
+    if (list) {
+      list.push(record);
+    } else {
+      buckets.set(key, [record]);
+    }
+  }
+  return buckets;
+}
+
+// Daily buckets for the current month, 1st through today, with empty days filled.
+export function summarizeDaily(records: UsageRecord[], now = new Date()): TrendBucket[] {
+  const buckets = bucketBy(records, dayKeyOf);
+  const cursor = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const result: TrendBucket[] = [];
+  while (cursor <= end) {
+    const key = dayKeyOf(cursor);
+    result.push({ key, startMs: cursor.getTime(), summary: summarize(buckets.get(key) ?? []) });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+}
+
+// Monthly buckets from the earliest record's month through this month, gaps filled.
+export function summarizeMonthly(records: UsageRecord[], now = new Date()): TrendBucket[] {
+  if (records.length === 0) {
+    return [];
+  }
+  const buckets = bucketBy(records, monthKeyOf);
+  let earliest = Infinity;
+  for (const record of records) {
+    earliest = Math.min(earliest, record.timestamp);
+  }
+  const first = new Date(earliest);
+  const cursor = new Date(first.getFullYear(), first.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), 1);
+  const result: TrendBucket[] = [];
+  while (cursor <= end) {
+    const key = monthKeyOf(cursor);
+    result.push({ key, startMs: cursor.getTime(), summary: summarize(buckets.get(key) ?? []) });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return result;
+}
+
 // Logs sometimes drop the [1m] marker, so a prompt larger than the base
 // window is itself proof of the 1M tier.
 function contextWindowFor(model: string, tokens: number): number {
