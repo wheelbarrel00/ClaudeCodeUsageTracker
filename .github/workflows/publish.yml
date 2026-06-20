@@ -10,6 +10,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
+    # contents: write lets the GITHUB_TOKEN create the GitHub Release below.
+    permissions:
+      contents: write
+
     # Secrets are mapped to env so the steps below can self-skip when a token is absent.
     env:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
@@ -71,3 +75,24 @@ jobs:
             exit $CODE
           fi
           echo "Published to VS Code Marketplace."
+
+      # GitHub Release record (uses the built-in GITHUB_TOKEN, not the registry
+      # PATs). Idempotent: skips if a release for this tag already exists. Notes
+      # come from the matching CHANGELOG section, falling back to auto-generated.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice title=GitHub Release::$TAG already exists - skipping."
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          awk -v hdr="## [$VERSION]" 'index($0, hdr)==1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then
+            gh release create "$TAG" extension.vsix --title "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" extension.vsix --title "$TAG" --generate-notes
+          fi
+          echo "Created GitHub Release $TAG."
