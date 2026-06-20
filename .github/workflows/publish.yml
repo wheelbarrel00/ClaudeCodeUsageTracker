@@ -89,10 +89,12 @@ jobs:
             exit 0
           fi
           VERSION="${TAG#v}"
+          VSIX="claude-code-usage-tracker-wb00-${VERSION}.vsix"
+          cp extension.vsix "$VSIX"
           awk -v hdr="## [$VERSION]" 'index($0, hdr)==1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
           if [ -s notes.md ]; then
-            gh release create "$TAG" extension.vsix --title "$TAG" --notes-file notes.md
+            gh release create "$TAG" "$VSIX" --title "$TAG" --notes-file notes.md
           else
-            gh release create "$TAG" extension.vsix --title "$TAG" --generate-notes
+            gh release create "$TAG" "$VSIX" --title "$TAG" --generate-notes
           fi
           echo "Created GitHub Release $TAG."
