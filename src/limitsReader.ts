@@ -14,10 +14,20 @@ export interface ScopedLimit extends LimitWindow {
   label: string;
 }
 
+export interface ExtraUsage {
+  isEnabled: boolean;
+  usedCredits?: number; // minor units (e.g. cents)
+  monthlyLimit?: number; // minor units
+  utilization?: number; // 0-100
+  currency?: string;
+  decimalPlaces?: number; // minor-unit exponent
+}
+
 export interface PlanLimits {
   fiveHour?: LimitWindow;
   sevenDay?: LimitWindow;
   scoped: ScopedLimit[];
+  extraUsage?: ExtraUsage;
   fetchedAt?: number;
 }
 
@@ -96,10 +106,47 @@ export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefi
     pushTopScoped(scoped, 'Sonnet', data.seven_day_sonnet, now);
   }
 
-  if (!fiveHour && !sevenDay && scoped.length === 0) {
+  const extraUsage = parseExtraUsage(data.extra_usage);
+
+  if (!fiveHour && !sevenDay && scoped.length === 0 && !extraUsage) {
     return undefined;
   }
-  return { fiveHour, sevenDay, scoped, fetchedAt };
+  return { fiveHour, sevenDay, scoped, extraUsage, fetchedAt };
+}
+
+function parseExtraUsage(raw: any): ExtraUsage | undefined {
+  if (!raw || typeof raw !== 'object' || raw.is_enabled !== true) {
+    return undefined;
+  }
+  return {
+    isEnabled: true,
+    usedCredits: num(raw.used_credits),
+    monthlyLimit: num(raw.monthly_limit),
+    utilization: num(raw.utilization),
+    currency: typeof raw.currency === 'string' && raw.currency ? raw.currency : undefined,
+    decimalPlaces: num(raw.decimal_places),
+  };
+}
+
+// Formats extra-usage spend as "$3.50" or "$3.50 / $50.00" (used / monthly cap).
+// Anthropic reports money as minor units + an exponent (decimal_places).
+export function formatExtraSpend(extra: ExtraUsage): string {
+  if (extra.usedCredits === undefined) {
+    return '';
+  }
+  const exponent = Math.min(100, Math.max(0, Math.round(extra.decimalPlaces ?? 2)));
+  const divisor = Math.pow(10, exponent);
+  const currency = extra.currency ?? 'USD';
+  const money = (minor: number): string => {
+    const value = minor / divisor;
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+    } catch {
+      return `$${value.toFixed(exponent)}`;
+    }
+  };
+  const cap = extra.monthlyLimit !== undefined ? ` / ${money(extra.monthlyLimit)}` : '';
+  return `${money(extra.usedCredits)}${cap}`;
 }
 
 // A window whose reset time has passed rolled over since the data was fetched,

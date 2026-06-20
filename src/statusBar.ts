@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
 import { ContextInfo } from './dataLoader';
-import { PlanLimits, LimitWindow, ScopedLimit, formatReset, formatAge } from './limitsReader';
+import { PlanLimits, LimitWindow, ScopedLimit, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -37,10 +37,12 @@ export class StatusBarController {
     const showContext = cfg.get<boolean>('showContext', true);
     const showCost = cfg.get<boolean>('showCost', true);
     const showTokens = cfg.get<boolean>('showTokens', true);
+    const showExtraUsage = cfg.get<boolean>('showExtraUsage', false);
     const decimals = cfg.get<number>('decimalPlaces', 2);
     const currency = cfg.get<string>('currency', 'USD');
 
-    const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined);
+    const extra = showExtraUsage && limits?.extraUsage?.isEnabled ? limits.extraUsage : undefined;
+    const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined, extra);
 
     const live = showLimits ? limits : undefined;
     this.renderLimit(this.fiveHour, '5h', live?.fiveHour, tooltip);
@@ -56,6 +58,12 @@ export class StatusBarController {
     }
     if (showTokens) {
       parts.push(`${formatTokens(totalTokens(summary))} tok`);
+    }
+    if (extra) {
+      const spend = formatExtraSpend(extra);
+      if (spend) {
+        parts.push(`extra ${spend}`);
+      }
     }
     if (parts.length) {
       this.main.text = parts.join('  ');
@@ -108,7 +116,7 @@ function severityColor(severity?: string): vscode.ThemeColor | undefined {
   }
 }
 
-function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
+function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraUsage): string {
   const lines: string[] = [];
   if (limits) {
     const limitLines: string[] = [];
@@ -136,6 +144,16 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
     lines.push(
       `Context: ${Math.round(context.percent)}%  ·  ${context.tokens.toLocaleString('en-US')} / ${context.windowTokens.toLocaleString('en-US')} tokens`
     );
+  }
+  if (extra) {
+    const spend = formatExtraSpend(extra);
+    if (spend) {
+      if (lines.length) {
+        lines.push('');
+      }
+      const util = extra.utilization !== undefined ? `  ·  ${Math.max(0, Math.round(extra.utilization))}%` : '';
+      lines.push(`Extra usage (pay-as-you-go): ${spend}${util}`);
+    }
   }
   return lines.length ? lines.join('\n') : 'Claude Code Usage Tracker';
 }

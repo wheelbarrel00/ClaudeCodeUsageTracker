@@ -18,7 +18,7 @@ import {
   SessionSummary,
   TrendBucket,
 } from './dataLoader';
-import { PlanLimits, LimitWindow, formatReset, formatAge } from './limitsReader';
+import { PlanLimits, LimitWindow, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -117,7 +117,35 @@ function buildPayload(
       branchesTable(windows[key].byBranch, money) +
       sessionsTable(windows[key].sessions, money);
   }
-  return { limitsHtml: limitsSection(limits), cardsHtml, charts: chartSet(records, money), tables };
+  const showExtraUsage = cfg.get<boolean>('showExtraUsage', false);
+  const limitsHtml = limitsSection(limits) + extraUsageSection(showExtraUsage ? limits?.extraUsage : undefined);
+  return { limitsHtml, cardsHtml, charts: chartSet(records, money), tables };
+}
+
+function extraUsageSection(extra: ExtraUsage | undefined): string {
+  if (!extra || !extra.isEnabled) {
+    return '';
+  }
+  const spend = formatExtraSpend(extra);
+  if (!spend) {
+    return '';
+  }
+  let bar = '';
+  if (extra.utilization !== undefined) {
+    const pct = Math.max(0, Math.round(extra.utilization));
+    const ofCap = extra.monthlyLimit !== undefined ? ' of monthly cap' : ' used';
+    bar = `
+        <div class="bar-track"><div class="bar-fill normal" style="width:${Math.min(100, pct)}%"></div></div>
+        <div class="bar-sub">${pct}%${ofCap}</div>`;
+  }
+  return `<section class="limits">
+    <h2 class="section">Extra usage</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bar-head"><span>Pay-as-you-go</span><span class="bar-pct">${esc(spend)}</span></div>${bar}
+      </div>
+    </div>
+  </section>`;
 }
 
 function limitsSection(limits: PlanLimits | undefined): string {

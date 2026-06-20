@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -122,6 +122,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show today's token count in the status bar."
+        },
+        "claudeCodeUsageTracker.showExtraUsage": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show pay-as-you-go extra usage (spend beyond your plan limits) in the status bar and dashboard. Off by default; only appears when your account has extra usage enabled. Figures come from Anthropic's usage API."
         }
       }
     }

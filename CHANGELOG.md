@@ -6,6 +6,16 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-06-20
+
+### Added
+- Pay-as-you-go **extra usage** monitoring (`showExtraUsage`, off by default).
+  When your account has extra usage enabled, your spend beyond plan limits is
+  shown as `extra <spent> / <cap>` in the status bar, with detail in the tooltip
+  and an Extra usage section in the dashboard. Read from Anthropic's usage
+  response (`extra_usage`: minor units + currency); nothing is shown when your
+  account has extra usage disabled.
+
 ## [1.0.4] - 2026-06-19
 
 ### Changed

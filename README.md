@@ -24,6 +24,7 @@
 
 - **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), each led by a Claude sunburst that turns green / yellow / red as Claude flags that window, plus the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently. Click any of them to open the dashboard.
 - **Plan limits** &mdash; real 5h / weekly usage with reset times and per-model scoped windows, shown as bars in the dashboard. Fetched live from Anthropic's usage endpoint (the same call Claude Code makes) so the numbers stay current even mid-session, with Claude Code's on-disk cache as a fallback.
+- **Extra usage (pay-as-you-go)** &mdash; optional, **off by default**: when your account has pay-as-you-go enabled, your spend beyond plan limits is shown in the status bar (`extra $3.50 / $50.00`), the tooltip, and the dashboard. Turn on with `showExtraUsage`.
 - **Context window** &mdash; the latest request's prompt size as a percent of the model's window (like `/context`), with 1M-tier detection.
 - **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration).
 - **Trend** &mdash; a bar chart of usage over time: daily across the current month or monthly across all time, switchable between cost and tokens, with the current day highlighted and a running total / peak summary. Empty days and months are filled in, so gaps in usage stay visible.
@@ -61,6 +62,13 @@ it is never written back &mdash; and talks only to Anthropic's own hosts
 refreshing, which is held in memory). Set `useLiveApi` to `false` to read only
 the local cache file and make no network requests.
 
+If your account has pay-as-you-go **extra usage** enabled, that same usage
+response carries your spend beyond plan limits. With `showExtraUsage` on (it is
+**off by default**), the extension shows it as `extra <spent> / <cap>` in the
+status bar and an Extra usage section in the dashboard. Amounts come straight
+from Anthropic (minor units + currency); nothing is shown when your account has
+extra usage disabled.
+
 ## Settings
 
 | Setting | Default | Description |
@@ -75,6 +83,7 @@ the local cache file and make no network requests.
 | `claudeCodeUsageTracker.showContext` | `true` | Show the current session's context-window fill (like `/context`). |
 | `claudeCodeUsageTracker.showCost` | `true` | Show today's estimated cost. |
 | `claudeCodeUsageTracker.showTokens` | `true` | Show today's token count. |
+| `claudeCodeUsageTracker.showExtraUsage` | `false` | Show pay-as-you-go extra usage (spend beyond plan limits) in the status bar and dashboard. Only appears when your account has extra usage enabled. |
 | `claudeCodeUsageTracker.projectGroupingMode` | `git` | Group the dashboard's By project breakdown by git repo, folder, or path. |
 
 ## Troubleshooting
@@ -91,6 +100,12 @@ neither is available, run Claude Code once (and sign in) so the credentials and
 cache exist. The status-bar segments also honor the `showLimits` setting and only
 appear while a limit window is live. Set `useLiveApi` to `false` to use the cache
 file only.
+
+**Extra usage (pay-as-you-go) doesn't show.**
+It is **off by default** &mdash; turn on `showExtraUsage`. Even then it only
+appears when your Anthropic account actually has pay-as-you-go enabled (the API
+reports `extra_usage.is_enabled`); if your account has no extra usage, there is
+nothing to display.
 
 **Usage history is missing older days or months.**
 Claude Code automatically deletes conversation logs older than `cleanupPeriodDays`
