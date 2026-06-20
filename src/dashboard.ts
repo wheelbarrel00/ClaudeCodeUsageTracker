@@ -18,7 +18,7 @@ import {
   SessionSummary,
   TrendBucket,
 } from './dataLoader';
-import { PlanLimits, LimitWindow, formatReset, formatAge, formatUtilization } from './limitsReader';
+import { PlanLimits, LimitWindow, formatReset, formatAge } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -148,11 +148,12 @@ ${rows.join('\n')}
 }
 
 function barRow(label: string, window: LimitWindow): string {
-  const width = Math.min(100, Math.max(0, Math.round(window.utilization)));
+  const pct = Math.round(window.utilization);
+  const width = Math.min(100, Math.max(0, pct));
   const reset = formatReset(window.resetsAt);
   const sub = reset ? `\n        <div class="bar-sub">${reset}</div>` : '';
   return `      <div class="bar-row">
-        <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${esc(formatUtilization(window))}</span></div>
+        <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
         <div class="bar-track"><div class="bar-fill ${severityClass(window.severity)}" style="width:${width}%"></div></div>${sub}
       </div>`;
 }

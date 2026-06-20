@@ -6,6 +6,15 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-19
+
+### Changed
+- A limit window whose reset has already passed now shows a normal green `0%`
+  instead of a muted `—`. With live fetching on by default the real current
+  value is shown almost always; `0%` is just the baseline for a freshly reset
+  window. The "Updated X ago" note in the tooltip and dashboard still flags a
+  reading that fell back to a stale cache.
+
 ## [1.0.3] - 2026-06-19
 
 ### Added

@@ -8,7 +8,6 @@ export interface LimitWindow {
   utilization: number;
   resetsAt?: number;
   severity: Severity;
-  stale?: boolean;
 }
 
 export interface ScopedLimit extends LimitWindow {
@@ -103,13 +102,11 @@ export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefi
   return { fiveHour, sevenDay, scoped, fetchedAt };
 }
 
-// A window whose reset time has passed rolled over while the cache sat stale
-// (no active session to refresh it), so the old utilization no longer applies:
-// report a fresh, empty window flagged `stale` so callers can show it as an
-// inference rather than a live reading. rollMs > 0 projects the next weekly
-// boundary (best-effort, assuming a fixed 7-day cadence); rollMs = 0 clears the
-// reset for the usage-anchored 5-hour window, whose next reset is unknown until
-// it is used again.
+// A window whose reset time has passed rolled over since the data was fetched,
+// so the old utilization no longer applies: report a fresh, empty 0% window.
+// rollMs > 0 projects the next weekly boundary (best-effort, assuming a fixed
+// 7-day cadence); rollMs = 0 clears the reset for the usage-anchored 5-hour
+// window, whose next reset is unknown until it is used again.
 function applyExpiry<T extends LimitWindow>(window: T | undefined, now: number, rollMs: number): T | undefined {
   if (!window || window.resetsAt === undefined || window.resetsAt > now) {
     return window;
@@ -119,7 +116,7 @@ function applyExpiry<T extends LimitWindow>(window: T | undefined, now: number, 
     const periods = Math.floor((now - window.resetsAt) / rollMs) + 1;
     resetsAt = window.resetsAt + periods * rollMs;
   }
-  return { ...window, utilization: 0, severity: 'normal', resetsAt, stale: true };
+  return { ...window, utilization: 0, severity: 'normal', resetsAt };
 }
 
 export function formatAge(fetchedAt?: number, now = Date.now()): string {
@@ -140,10 +137,6 @@ export function formatAge(fetchedAt?: number, now = Date.now()): string {
   }
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
-}
-
-export function formatUtilization(window: LimitWindow): string {
-  return window.stale ? '—' : `${Math.round(window.utilization)}%`;
 }
 
 export function formatReset(resetsAt?: number): string {

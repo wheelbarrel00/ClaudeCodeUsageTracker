@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { UsageSummary } from './types';
 import { ContextInfo } from './dataLoader';
-import { PlanLimits, LimitWindow, ScopedLimit, formatReset, formatAge, formatUtilization } from './limitsReader';
+import { PlanLimits, LimitWindow, ScopedLimit, formatReset, formatAge } from './limitsReader';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -76,10 +76,8 @@ export class StatusBarController {
       item.hide();
       return;
     }
-    item.text = `${ICON} ${label} ${formatUtilization(window)}`;
-    item.color = window.stale
-      ? new vscode.ThemeColor('descriptionForeground')
-      : severityColor(window.severity);
+    item.text = `${ICON} ${label} ${Math.round(window.utilization)}%`;
+    item.color = severityColor(window.severity);
     item.tooltip = tooltip;
     item.show();
   }
@@ -144,7 +142,7 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo): string {
 
 function limitLine(label: string, window: LimitWindow): string {
   const reset = formatReset(window.resetsAt);
-  const pct = formatUtilization(window);
+  const pct = `${Math.round(window.utilization)}%`;
   return reset ? `${label}: ${pct}  ·  ${reset}` : `${label}: ${pct}`;
 }
 
