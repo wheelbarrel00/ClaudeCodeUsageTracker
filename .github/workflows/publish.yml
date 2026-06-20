@@ -1,6 +1,6 @@
 ﻿name: Publish Extension
 
-# Triggers when you push a version tag, e.g.  git tag v1.0.3 && git push --tags
+# Triggers when you push a version tag, e.g.  git tag v1.0.5 && git push origin v1.0.5
 on:
   push:
     tags:
@@ -34,11 +34,40 @@ jobs:
         run: npx --yes @vscode/vsce package --out extension.vsix
 
       # Open VSX (the registry Cursor uses). Runs only if OVSX_PAT is set.
+      # Duplicate-version guard: if this version is already published, that is a
+      # clean skip (exit 0) instead of a red failure. Real errors still fail.
       - name: Publish to Open VSX
         if: env.OVSX_PAT != ''
-        run: npx --yes ovsx publish extension.vsix -p "$OVSX_PAT"
+        run: |
+          set +e
+          OUT=$(npx --yes ovsx publish extension.vsix -p "$OVSX_PAT" 2>&1)
+          CODE=$?
+          echo "$OUT"
+          if [ $CODE -ne 0 ]; then
+            if echo "$OUT" | grep -qiE "already (exists|published)|is already|same version"; then
+              echo "::notice title=Open VSX::This version is already published - skipping (not a failure)."
+              exit 0
+            fi
+            echo "::error title=Open VSX::Publish failed for a reason other than a duplicate version."
+            exit $CODE
+          fi
+          echo "Published to Open VSX."
 
       # VS Code Marketplace. Runs only if VSCE_PAT is set (needs the Azure PAT).
+      # Same duplicate-version guard.
       - name: Publish to VS Code Marketplace
         if: env.VSCE_PAT != ''
-        run: npx --yes @vscode/vsce publish --packagePath extension.vsix -p "$VSCE_PAT"
+        run: |
+          set +e
+          OUT=$(npx --yes @vscode/vsce publish --packagePath extension.vsix -p "$VSCE_PAT" 2>&1)
+          CODE=$?
+          echo "$OUT"
+          if [ $CODE -ne 0 ]; then
+            if echo "$OUT" | grep -qiE "already (exists|published)|same version|already a version|conflict|409"; then
+              echo "::notice title=VS Code Marketplace::This version is already published - skipping (not a failure)."
+              exit 0
+            fi
+            echo "::error title=VS Code Marketplace::Publish failed for a reason other than a duplicate version."
+            exit $CODE
+          fi
+          echo "Published to VS Code Marketplace."
