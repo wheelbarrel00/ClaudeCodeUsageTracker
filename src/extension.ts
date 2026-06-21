@@ -5,12 +5,14 @@ import { Dashboard } from './dashboard';
 import { loadUsageRecords, summarize, filterToday, currentContext, claudeLogRoot, ContextInfo } from './dataLoader';
 import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
 import { fetchLiveLimits } from './usageApi';
+import { PredictionController, PredictionView } from './prediction';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
 let statusBar: StatusBarController;
 let dashboard: Dashboard;
+let predictor: PredictionController;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let watchDebounce: ReturnType<typeof setTimeout> | undefined;
 let refreshInFlight = false;
@@ -18,21 +20,31 @@ let refreshAgain = false;
 let latest: UsageSummary = emptySummary();
 let latestRecords: UsageRecord[] = [];
 let latestLimits: PlanLimits | undefined;
+let lastGoodLimits: PlanLimits | undefined;
+let lastGoodLimitsAt = 0;
 let latestContext: ContextInfo | undefined;
+let latestPrediction: PredictionView | undefined;
+
+// Only bridge a transient limits gap for this long; past it we'd rather show
+// nothing than pin a stale, possibly-expired window forever.
+const LIMITS_FALLBACK_MAX_MS = 10 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBarController();
   dashboard = new Dashboard();
+  predictor = new PredictionController();
 
   context.subscriptions.push(
     statusBar,
     dashboard,
+    { dispose: () => predictor.dispose() },
     { dispose: stopRefresh },
     vscode.commands.registerCommand(`${CONFIG_SECTION}.refresh`, () => void refresh()),
     vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords, latestLimits)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
-        statusBar.render(latest, latestLimits, latestContext);
+        latestPrediction = predictor.update(latestRecords, latestLimits);
+        statusBar.render(latest, latestLimits, latestContext, latestPrediction);
         dashboard.update(latestRecords, latestLimits);
         scheduleRefresh();
       }
@@ -59,10 +71,20 @@ async function refresh(): Promise<void> {
       refreshAgain = false;
       const [records, limits] = await Promise.all([loadUsageRecords(), getPlanLimits()]);
       latestRecords = records;
-      latestLimits = limits;
+      // A transient live+cache gap (e.g. a 429 backoff) returns undefined; keep the
+      // last good limits for a short while so the status bar and ETA don't blank out
+      // mid-session. The "Updated X ago" tooltip still flags that the reading is
+      // stale, and the cap below stops us pinning an expired window indefinitely.
+      if (limits) {
+        lastGoodLimits = limits;
+        lastGoodLimitsAt = Date.now();
+      }
+      const fallbackFresh = Date.now() - lastGoodLimitsAt <= LIMITS_FALLBACK_MAX_MS;
+      latestLimits = limits ?? (fallbackFresh ? lastGoodLimits : undefined);
       latestContext = currentContext(records);
       latest = summarize(filterToday(records));
-      statusBar.render(latest, latestLimits, latestContext);
+      latestPrediction = predictor.update(latestRecords, latestLimits);
+      statusBar.render(latest, latestLimits, latestContext, latestPrediction);
       dashboard.update(latestRecords, latestLimits);
     } while (refreshAgain);
   } finally {

@@ -6,6 +6,7 @@ node_modules/**
 .vscodeignore
 **/*.ts
 **/*.map
+out/**/*.test.js
 tsconfig.json
 .git/**
 .claude/**
@@ -15,3 +16,4 @@ images/**
 !images/stats.png
 !images/logo.jpg
 !images/statusbar.png
+!images/predictive-warning.png

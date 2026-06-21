@@ -6,6 +6,33 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-21
+
+### Added
+- **Predictive alerts** — the extension now forecasts when you'll hit a plan limit
+  and warns you before you do, so you don't get cut off mid-session. On by default;
+  turn the whole feature off with `predictiveAlerts.enabled`. It runs entirely on
+  the usage figures already shown and makes no network calls of its own.
+  - **Status-bar pace forecast**, computed from your *average* consumption over the
+    current window so far — so each window is judged on its own timescale (the 5-hour
+    window over hours, the 7-day window over days) and a single percentage tick can't
+    manufacture an alarming number. The **5-hour** window shows a live pace meter: the
+    projected end-of-window utilization at your current rate (`5h 24% → 48%`). The
+    **weekly** window shows a time-to-limit ETA only when you're on a trustworthy
+    track to breach it before reset. Toggle each with `predictiveAlerts.showFiveHourEta`
+    and `predictiveAlerts.showWeeklyEta`.
+  - **Proactive warnings.** A notification fires when a window crosses a configurable
+    utilization threshold — 75% and 90% by default (`predictiveAlerts.warnThresholds`)
+    — and, with `predictiveAlerts.predictBreach` on, when your current pace projects
+    you'll hit a limit before it resets. Each warning fires once per window, re-arms
+    when the window resets, and only fires while you're actually burning, so an idle
+    window never nags.
+  - **Burn rate** in the status-bar tooltip: tokens/min and cost/min over a
+    configurable trailing window (`predictiveAlerts.windowMinutes`, default 15).
+  - **Model-cost advisor** (`predictiveAlerts.modelAdvisor.enabled`, **off by
+    default**): when recent turns show heavy spend on an expensive model for little
+    output, a one-time, dismissible hint suggests a cheaper model for routine work.
+
 ## [1.0.5] - 2026-06-20
 
 ### Added

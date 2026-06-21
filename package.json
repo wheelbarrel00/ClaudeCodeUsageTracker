@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -127,6 +127,48 @@
           "type": "boolean",
           "default": false,
           "description": "Show pay-as-you-go extra usage (spend beyond your plan limits) in the status bar and dashboard. Off by default; only appears when your account has extra usage enabled. Figures come from Anthropic's usage API."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Predictive alerts: estimate when you'll hit the 5-hour and weekly limits from your recent burn rate, show a time-to-limit ETA in the status bar, and warn before you run out. Turn off to disable all prediction features."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.windowMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "description": "Trailing window, in minutes, used to measure your burn rate and how fast your plan-limit utilization is rising."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.warnThresholds": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            75,
+            90
+          ],
+          "description": "Utilization percentages at which to show a warning notification for either window. Each threshold fires once per window (re-armed when the window resets)."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.predictBreach": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also warn when your current pace projects you'll hit a limit before it resets (e.g. \"~20m to the 5-hour limit, before it resets in 1h10m\")."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a 5-hour pace meter in the status bar: the projected end-of-window utilization at your current pace (e.g. `5h 24% → 48%`). A live 'how hard am I working' gauge that climbs toward 100% as you burn faster. Turn off to hide it. (Set both this and Show Weekly Eta off to hide all forecasts.)"
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a time-to-limit ETA for the weekly window — but only when your pace would actually hit the weekly limit before it resets (the weekly number moves over days, so a constant readout would be noisy). Turn off to hide the weekly ETA entirely."
+        },
+        "claudeCodeUsageTracker.predictiveAlerts.modelAdvisor.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Model-cost advisor (off by default): when recent turns show heavy spend on an expensive model for little output, show a one-time, dismissible hint suggesting a cheaper model for routine work. Requires Predictive Alerts to be enabled."
         }
       }
     }
@@ -135,6 +177,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test \"out/**/*.test.js\"",
     "gen:icons": "node scripts/gen-icons.js"
   },
   "devDependencies": {

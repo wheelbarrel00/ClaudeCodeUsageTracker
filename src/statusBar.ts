@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { UsageSummary } from './types';
 import { ContextInfo } from './dataLoader';
 import { PlanLimits, LimitWindow, ScopedLimit, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
+import { PredictionView } from './prediction';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -30,7 +31,7 @@ export class StatusBarController {
   }
 
   /** Render a usage summary, honouring the user's display settings. */
-  render(summary: UsageSummary, limits?: PlanLimits, context?: ContextInfo): void {
+  render(summary: UsageSummary, limits?: PlanLimits, context?: ContextInfo, prediction?: PredictionView): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const showLimits = cfg.get<boolean>('showLimits', true);
     const showOpusWeekly = cfg.get<boolean>('showOpusWeekly', false);
@@ -42,11 +43,13 @@ export class StatusBarController {
     const currency = cfg.get<string>('currency', 'USD');
 
     const extra = showExtraUsage && limits?.extraUsage?.isEnabled ? limits.extraUsage : undefined;
-    const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined, extra);
+    const pred = prediction?.enabled ? prediction : undefined;
+    const predTip = pred ? predictionTooltip(pred, currency, decimals) : undefined;
+    const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined, extra, predTip);
 
     const live = showLimits ? limits : undefined;
-    this.renderLimit(this.fiveHour, '5h', live?.fiveHour, tooltip);
-    this.renderLimit(this.weekly, 'wk', live?.sevenDay, tooltip);
+    this.renderLimit(this.fiveHour, '5h', live?.fiveHour, tooltip, pred?.fiveHour?.segment);
+    this.renderLimit(this.weekly, 'wk', live?.sevenDay, tooltip, pred?.sevenDay?.segment);
     this.renderLimit(this.opus, 'opus', showOpusWeekly && live ? opusWindow(live) : undefined, tooltip);
 
     const parts: string[] = [];
@@ -78,13 +81,15 @@ export class StatusBarController {
     item: vscode.StatusBarItem,
     label: string,
     window: LimitWindow | undefined,
-    tooltip: string
+    tooltip: string,
+    segment?: string
   ): void {
     if (!window) {
       item.hide();
       return;
     }
-    item.text = `${ICON} ${label} ${Math.round(window.utilization)}%`;
+    const suffix = segment ? ` ${segment}` : '';
+    item.text = `${ICON} ${label} ${Math.round(window.utilization)}%${suffix}`;
     item.color = severityColor(window.severity);
     item.tooltip = tooltip;
     item.show();
@@ -116,26 +121,55 @@ function severityColor(severity?: string): vscode.ThemeColor | undefined {
   }
 }
 
-function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraUsage): string {
+interface PredictionTooltip {
+  fiveHourDetail?: string;
+  sevenDayDetail?: string;
+  burnLine?: string;
+}
+
+function predictionTooltip(pred: PredictionView, currency: string, decimals: number): PredictionTooltip {
+  let burnLine: string | undefined;
+  const burn = pred.burn;
+  if (burn && burn.recordCount > 0) {
+    const minutes = Math.round(burn.windowMs / 60000);
+    const tokens = `${formatTokens(Math.round(burn.tokensPerMin))} tok/min`;
+    const cost = `${formatCurrency(burn.costPerMin, currency, decimals)}/min`;
+    burnLine = `Burn: ${tokens}  ·  ${cost}  ·  last ${minutes}m`;
+  }
+  return { fiveHourDetail: pred.fiveHour?.detail, sevenDayDetail: pred.sevenDay?.detail, burnLine };
+}
+
+function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraUsage, pred?: PredictionTooltip): string {
   const lines: string[] = [];
+  let burnShown = false;
   if (limits) {
     const limitLines: string[] = [];
     if (limits.fiveHour) {
-      limitLines.push(limitLine('5h', limits.fiveHour));
+      limitLines.push(limitLine('5h', limits.fiveHour, pred?.fiveHourDetail));
     }
     if (limits.sevenDay) {
-      limitLines.push(limitLine('Week', limits.sevenDay));
+      limitLines.push(limitLine('Week', limits.sevenDay, pred?.sevenDayDetail));
     }
     for (const scoped of limits.scoped) {
       limitLines.push(limitLine(scoped.label, scoped));
     }
     if (limitLines.length) {
       lines.push('Claude plan limits', ...limitLines);
+      if (pred?.burnLine) {
+        lines.push(pred.burnLine);
+        burnShown = true;
+      }
       const age = formatAge(limits.fetchedAt);
       if (age) {
         lines.push(`Updated ${age}`);
       }
     }
+  }
+  if (pred?.burnLine && !burnShown) {
+    if (lines.length) {
+      lines.push('');
+    }
+    lines.push(pred.burnLine);
   }
   if (context) {
     if (lines.length) {
@@ -158,10 +192,16 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraU
   return lines.length ? lines.join('\n') : 'Claude Code Usage Tracker';
 }
 
-function limitLine(label: string, window: LimitWindow): string {
+function limitLine(label: string, window: LimitWindow, detail?: string): string {
+  const parts = [`${Math.round(window.utilization)}%`];
   const reset = formatReset(window.resetsAt);
-  const pct = `${Math.round(window.utilization)}%`;
-  return reset ? `${label}: ${pct}  ·  ${reset}` : `${label}: ${pct}`;
+  if (reset) {
+    parts.push(reset);
+  }
+  if (detail) {
+    parts.push(detail);
+  }
+  return `${label}: ${parts.join('  ·  ')}`;
 }
 
 function totalTokens(summary: UsageSummary): number {
