@@ -6,6 +6,15 @@ aims to follow [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-06-21
+
+### Changed
+- Clarified the new status-bar **pace meter** in the README and Marketplace overview:
+  `5h 42% → 53%` is the projected end-of-window utilization at your current pace
+  (here, on track to finish the 5-hour window at 53%). Spelled out in the hero
+  caption and the Predictive alerts feature description so it reads clearly before
+  install. No functional change.
+
 ## [1.1.0] - 2026-06-21
 
 ### Added
