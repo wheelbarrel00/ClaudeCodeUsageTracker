@@ -2,12 +2,15 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
   },
   "license": "MIT",
+  "sponsor": {
+    "url": "https://github.com/sponsors/wheelbarrel00"
+  },
   "icon": "icon.png",
   "repository": {
     "type": "git",
