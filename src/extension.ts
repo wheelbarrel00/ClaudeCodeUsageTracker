@@ -6,6 +6,7 @@ import { loadUsageRecords, summarize, filterToday, currentContext, claudeLogRoot
 import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
 import { fetchLiveLimits } from './usageApi';
 import { PredictionController, PredictionView } from './prediction';
+import { AiAdvisor } from './aiAdvisor';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -30,8 +31,9 @@ let latestPrediction: PredictionView | undefined;
 const LIMITS_FALLBACK_MAX_MS = 10 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
+  const ai = new AiAdvisor(context.secrets);
   statusBar = new StatusBarController();
-  dashboard = new Dashboard();
+  dashboard = new Dashboard(ai);
   predictor = new PredictionController();
 
   context.subscriptions.push(
@@ -41,6 +43,8 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: stopRefresh },
     vscode.commands.registerCommand(`${CONFIG_SECTION}.refresh`, () => void refresh()),
     vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords, latestLimits)),
+    vscode.commands.registerCommand(`${CONFIG_SECTION}.setAiApiKey`, () => void ai.setApiKey()),
+    vscode.commands.registerCommand(`${CONFIG_SECTION}.clearAiApiKey`, () => void ai.clearApiKey()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
         latestPrediction = predictor.update(latestRecords, latestLimits);

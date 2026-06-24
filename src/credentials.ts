@@ -40,3 +40,9 @@ export function readOAuth(): OAuthCredentials | undefined {
 export function isExpiring(expiresAt?: number): boolean {
   return typeof expiresAt === 'number' && Date.now() + EXPIRY_SKEW_MS >= expiresAt;
 }
+
+// Subscription (Pro/Max) bills a flat fee, not per token — lets the advisor frame dollar figures as estimates, not a bill.
+export function isSubscription(): boolean {
+  const sub = readOAuth()?.subscriptionType;
+  return typeof sub === 'string' && sub.length > 0;
+}

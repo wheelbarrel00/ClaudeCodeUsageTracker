@@ -4,7 +4,36 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.2.0] - 2026-06-23
+
+### Added
+- **Advisor** — a new panel in the dashboard with ranked, money-quantified tips to
+  cut waste, computed entirely from your local usage data (no network, no API key,
+  no prompt text). Toggle with `advisor.enabled` (on by default). It surfaces:
+  - **Routing routine turns to a cheaper model** — when a period's spend includes a
+    run of short turns on an expensive model, it estimates what those same turns
+    would have cost one tier down (e.g. Opus → Sonnet) and shows the saving.
+  - **Long sessions re-processing context uncached** — sessions with many turns but
+    low prompt-cache reuse, where context was paid for at full input price instead
+    of read back at ~1/10th.
+  - **Sessions running near the context limit** — a habit of peaking above 80%
+    context, where Claude has to compact or drop earlier context to keep going.
+  - **A month-end spend forecast** at your current pace.
+  - **Subscription-aware framing** — on a Pro/Max plan (flat fee, no per-token billing)
+    the dollar figures are labeled *estimated API-equivalent usage* (a gauge, not a
+    bill) and the advice — local cards and the AI explanation alike — is framed around
+    your 5-hour / weekly session limits instead of a bill. The Today / This Month /
+    All Time cost cards also carry a subtle "≈ API-equivalent" caption.
+- **Explain with AI** (opt-in) — a button on the Advisor panel that turns the
+  computed signals into written, prioritized coaching. It calls Anthropic's Messages
+  API with **your own** API key (stored in VS Code Secret Storage via the new *Set
+  Anthropic API Key* command; never the Claude Code OAuth token). Only usage metadata
+  is sent by default; prompt text is included only if you enable
+  `advisor.ai.includePrompts` and confirm each time. The model is configurable with
+  `advisor.ai.model` (default Sonnet). Needs a pay-as-you-go Anthropic API key (a
+  Pro/Max subscription doesn't include API credit); the call surfaces Anthropic's
+  actual error — e.g. a 400 "credit balance is too low" with a one-click link to
+  billing — instead of a bare status code.
 
 ## [1.1.1] - 2026-06-21
 

@@ -422,7 +422,7 @@ test('sanitizeThresholds drops junk, dedups, and sorts', () => {
 test('cheaperTier suggests a cheaper model, or nothing for budget tiers', () => {
   assert.equal(cheaperTier('claude-opus-4-8'), 'Sonnet');
   assert.equal(cheaperTier('claude-sonnet-4-6'), 'Haiku');
-  assert.equal(cheaperTier('claude-fable-5'), 'Opus or Sonnet');
+  assert.equal(cheaperTier('claude-fable-5'), 'Sonnet');
   assert.equal(cheaperTier('claude-haiku-4-5'), undefined);
   assert.equal(cheaperTier('some-unknown-model'), undefined);
 });

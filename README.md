@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="images/stats.png" alt="Claude Code Usage dashboard" width="900" />
+  <img src="images/stats.png" alt="Claude Code Usage dashboard with the Advisor panel" width="900" />
 </p>
 
 ## Features
@@ -27,6 +27,7 @@
 - **Predictive alerts** &mdash; forecasts when you'll hit a limit and warns you before you do. The 5-hour limit gets a live **pace meter**: `5h 42% → 53%` means *at your current rate you're on track to finish the 5-hour window at 53%* (it climbs toward 100% as you push harder, so you can see at a glance whether you're cruising or about to run out). The weekly limit shows a time-to-limit **ETA** only when you're genuinely on track to breach it. **Notifications** fire at configurable thresholds (75% / 90%) and when your pace is about to breach a window before it resets, and the tooltip shows your live **burn rate** (tokens/min, cost/min). An optional, off-by-default **model-cost advisor** suggests a cheaper model when you're burning an expensive one on routine turns. On by default and 100% local &mdash; configure under `predictiveAlerts.*`.
 - **Extra usage (pay-as-you-go)** &mdash; optional, **off by default**: when your account has pay-as-you-go enabled, your spend beyond plan limits is shown in the status bar (`extra $3.50 / $50.00`), the tooltip, and the dashboard. Turn on with `showExtraUsage`.
 - **Context window** &mdash; the latest request's prompt size as a percent of the model's window (like `/context`), with 1M-tier detection.
+- **Advisor** &mdash; a panel in the dashboard with ranked, money-quantified tips to cut waste this month: routing routine turns to a cheaper model (with the estimated saving), long sessions that re-processed context uncached, sessions running near the context limit, and a month-end spend forecast. **Subscription-aware:** on a Pro/Max plan (where you pay a flat fee, not per token) it labels the dollar figures as *estimated API-equivalent usage* &mdash; a gauge, not a bill &mdash; and frames the advice around your 5-hour / weekly session limits. Computed entirely from your local usage data &mdash; no network call, no API key, and your prompts never leave your machine. On by default; turn it off with `advisor.enabled`. An optional **Explain with AI** button turns those signals into written, prioritized coaching &mdash; it calls Anthropic with **your own API key** &mdash; a pay-as-you-go key from the [Anthropic Console](https://console.anthropic.com/settings/keys), separate from your Claude Code subscription &mdash; stored in VS Code Secret Storage (set via the *Set Anthropic API Key* command, which links you straight to the console), sends only the usage summary by default, and never uses your Claude Code login. Prompt text is included only if you opt in (`advisor.ai.includePrompts`) and confirm.
 - **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration).
 - **Trend** &mdash; a bar chart of usage over time: daily across the current month or monthly across all time, switchable between cost and tokens, with the current day highlighted and a running total / peak summary. Empty days and months are filled in, so gaps in usage stay visible.
 - **Live updates** &mdash; file watchers over your logs and the limits cache refresh the moment Claude Code writes, with a timer as a fallback.
@@ -62,6 +63,28 @@ it is never written back &mdash; and talks only to Anthropic's own hosts
 (`api.anthropic.com` for usage, and `platform.claude.com` only if the token needs
 refreshing, which is held in memory). Set `useLiveApi` to `false` to read only
 the local cache file and make no network requests.
+
+The **Advisor** panel is computed entirely on-device. Its optional **Explain with
+AI** button is the one feature that sends data off-device, and only when you click
+it: it POSTs your usage summary to `api.anthropic.com/v1/messages` authenticated
+with **your own** Anthropic API key &mdash; created at
+[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+(a pay-as-you-go API key, separate from and billed independently of your Claude Code
+subscription) and kept in VS Code Secret Storage, never the Claude Code OAuth token. By default only metadata is sent &mdash; token counts,
+costs, cache figures, model names, and the locally-computed tips, never any prompt
+or response text. Prompt text is included only if you both turn on
+`advisor.ai.includePrompts` and confirm the modal each time, in which case a small,
+truncated sample of recent prompts is added so it can coach on prompt quality. The
+key is read locally and never leaves your machine; it is never bundled with the
+extension or shared with anyone else.
+
+<p align="center">
+  <img src="images/ai-advisor.png" alt="Explain with AI output: prioritized, written coaching on cutting token usage" width="720" />
+</p>
+
+<p align="center">
+  <sub>&ldquo;Explain with AI&rdquo; turns the local signals into prioritized, written coaching &mdash; called with your own API key, framed around your plan limits when you're on a subscription.</sub>
+</p>
 
 If your account has pay-as-you-go **extra usage** enabled, that same usage
 response carries your spend beyond plan limits. With `showExtraUsage` on (it is
@@ -125,6 +148,9 @@ already on screen and makes no extra network calls.
 | `claudeCodeUsageTracker.showTokens` | `true` | Show today's token count. |
 | `claudeCodeUsageTracker.showExtraUsage` | `false` | Show pay-as-you-go extra usage (spend beyond plan limits) in the status bar and dashboard. Only appears when your account has extra usage enabled. |
 | `claudeCodeUsageTracker.projectGroupingMode` | `git` | Group the dashboard's By project breakdown by git repo, folder, or path. |
+| `claudeCodeUsageTracker.advisor.enabled` | `true` | Show the Advisor panel in the dashboard: ranked, money-quantified tips to cut waste (cheaper-model routing, cache reuse, context bloat, spend forecast). Fully local; nothing leaves your machine. |
+| `claudeCodeUsageTracker.advisor.ai.model` | `claude-sonnet-4-6` | Model used by the Advisor's "Explain with AI" button (called with your own API key). Sonnet is a low-cost default; use an Opus id for deeper analysis. |
+| `claudeCodeUsageTracker.advisor.ai.includePrompts` | `false` | When using "Explain with AI", also send a small, truncated sample of your recent prompts so it can coach on prompt quality. Off by default (metadata only); you confirm each time prompts would be included. |
 | `claudeCodeUsageTracker.predictiveAlerts.enabled` | `true` | Master switch for predictive alerts (ETA, warnings, advisor). |
 | `claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta` | `true` | Show the 5-hour pace meter (projected end-of-window %, e.g. `5h 24% → 48%`) in the status bar. |
 | `claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta` | `true` | Show the weekly ETA, but only when you're on track to hit the weekly limit before it resets. |
@@ -202,6 +228,27 @@ That's the model-cost advisor, which is **off by default**. Turn it on with
 `predictiveAlerts.modelAdvisor.enabled`. It's deliberately rare &mdash; it only speaks
 up when recent turns show heavy spend on an expensive model for little output, at most
 once every few hours, and it has a **Don't show again** button.
+
+**"Explain with AI" asks for an API key — where do I get one?**
+That button uses the Anthropic **API** (pay-as-you-go), which is **separate** from
+your Claude Code / claude.ai Pro/Max subscription &mdash; the subscription can't be
+used for it. Create a key at
+[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+(Anthropic Console → Settings → API keys); it starts with `sk-ant-`. Running **Set
+Anthropic API Key** offers an *Open Anthropic Console* button that takes you there.
+The key is stored in VS Code Secret Storage and used only for this feature; each
+explanation is a single API call (cents on Sonnet) billed to that key. Clear it
+anytime with **Clear Anthropic API Key**. The rest of the extension &mdash; status
+bar, dashboard, limits, the local Advisor tips &mdash; needs no API key.
+
+**A subscription (Pro/Max) isn't enough for the API by itself &mdash; HTTP 400
+"credit balance is too low".** The Anthropic **API** is pay-as-you-go and
+**separate** from your Claude Code / claude.ai subscription and its session limits.
+Your `sk-ant-` key is valid, but its API account has no credit &mdash; a Pro/Max plan
+does not include API credit, and the subscription login can't be used to power
+third-party AI calls. Add a little credit at
+[console.anthropic.com → Billing](https://console.anthropic.com/settings/billing),
+then try again. (It's only cents per explanation.)
 
 ## Development
 

@@ -311,7 +311,7 @@ export function cheaperTier(model: string): string | undefined {
     return 'Sonnet';
   }
   if (m.includes('fable')) {
-    return 'Opus or Sonnet';
+    return 'Sonnet';
   }
   if (m.includes('sonnet')) {
     return 'Haiku';

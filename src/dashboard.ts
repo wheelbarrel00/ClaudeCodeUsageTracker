@@ -19,6 +19,9 @@ import {
   TrendBucket,
 } from './dataLoader';
 import { PlanLimits, LimitWindow, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
+import { analyze, Insight, savingsBadge } from './advisor';
+import { AiAdvisor, AiResult } from './aiAdvisor';
+import { isSubscription } from './credentials';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -37,6 +40,9 @@ export class Dashboard {
   private records: UsageRecord[] = [];
   private limits: PlanLimits | undefined;
   private ready = false;
+  private aiInFlight = false;
+
+  constructor(private readonly ai?: AiAdvisor) {}
 
   show(records: UsageRecord[], limits?: PlanLimits): void {
     this.records = records;
@@ -60,9 +66,14 @@ export class Dashboard {
       this.ready = false;
     });
     this.panel.webview.onDidReceiveMessage((message) => {
-      if (message && message.type === 'ready') {
+      if (!message) {
+        return;
+      }
+      if (message.type === 'ready') {
         this.ready = true;
         this.post();
+      } else if (message.type === 'explainWithAI') {
+        void this.runAi();
       }
     });
     this.panel.webview.html = shellHtml(this.panel.webview);
@@ -78,7 +89,22 @@ export class Dashboard {
 
   private post(): void {
     if (this.panel) {
-      this.panel.webview.postMessage(buildPayload(this.records, this.limits));
+      this.panel.webview.postMessage(buildPayload(this.records, this.limits, this.ai !== undefined));
+    }
+  }
+
+  private async runAi(): Promise<void> {
+    if (!this.ai || this.aiInFlight) {
+      return;
+    }
+    this.aiInFlight = true;
+    try {
+      const result = await this.ai.explain(this.records, this.limits);
+      if (this.panel && this.ready) {
+        this.panel.webview.postMessage({ type: 'aiResult', html: renderAiHtml(result) });
+      }
+    } finally {
+      this.aiInFlight = false;
     }
   }
 
@@ -94,21 +120,24 @@ interface ChartSet {
 
 function buildPayload(
   records: UsageRecord[],
-  limits: PlanLimits | undefined
-): { limitsHtml: string; cardsHtml: string; charts: ChartSet; tables: Record<string, string> } {
+  limits: PlanLimits | undefined,
+  aiEnabled: boolean
+): { limitsHtml: string; advisorHtml: string; cardsHtml: string; charts: ChartSet; tables: Record<string, string> } {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
   const groupingMode = cfg.get<string>('projectGroupingMode', 'git');
   const money = (value: number): string => formatCurrency(value, currency, decimals);
+  const subscription = isSubscription() || !!(limits?.fiveHour || limits?.sevenDay);
 
+  const monthRecords = filterMonth(records);
   const windows: Record<string, WindowData> = {
     today: windowData('Today', filterToday(records), groupingMode),
-    month: windowData('This Month', filterMonth(records), groupingMode),
+    month: windowData('This Month', monthRecords, groupingMode),
     all: windowData('All Time', records, groupingMode),
   };
   const order = ['today', 'month', 'all'];
-  const cardsHtml = order.map((key) => card(windows[key], money)).join('\n');
+  const cardsHtml = order.map((key) => card(windows[key], money, subscription)).join('\n');
   const tables: Record<string, string> = {};
   for (const key of order) {
     tables[key] =
@@ -119,7 +148,98 @@ function buildPayload(
   }
   const showExtraUsage = cfg.get<boolean>('showExtraUsage', false);
   const limitsHtml = limitsSection(limits) + extraUsageSection(showExtraUsage ? limits?.extraUsage : undefined);
-  return { limitsHtml, cardsHtml, charts: chartSet(records, money), tables };
+  const advisorHtml = cfg.get<boolean>('advisor.enabled', true)
+    ? advisorSection(
+        analyze({ records: monthRecords, sessions: windows.month.sessions, now: Date.now(), subscription }, money),
+        money,
+        aiEnabled,
+        subscription
+      )
+    : '';
+  return { limitsHtml, advisorHtml, cardsHtml, charts: chartSet(records, money), tables };
+}
+
+function advisorSection(
+  insights: Insight[],
+  money: (value: number) => string,
+  aiEnabled: boolean,
+  subscription: boolean
+): string {
+  const body = insights.length
+    ? `<div class="advisor-list">\n${insights.map((insight) => advisorItem(insight, money, subscription)).join('\n')}\n    </div>`
+    : `<div class="advisor-empty">No actionable insights right now — your recent usage looks efficient.</div>`;
+  const explain = aiEnabled
+    ? `<button id="advisor-explain" class="advisor-explain" title="Send your usage summary to Anthropic with your own API key for a written explanation">Explain with AI</button>`
+    : '';
+  const note = subscription
+    ? `<div class="advisor-note">Dollar figures are estimated pay-as-you-go API cost — a gauge of usage, not your subscription bill. Your real limit is the 5-hour / weekly caps above.</div>`
+    : '';
+  return `<section class="advisor">
+    <div class="advisor-head-row"><h2 class="section">Advisor</h2>${explain}</div>
+    ${body}
+    ${note}
+  </section>`;
+}
+
+export function renderAiHtml(result: AiResult): string {
+  if (!result.ok) {
+    return `<div class="ai-box ai-error">${esc(result.error)}</div>`;
+  }
+  return `<div class="ai-box">
+    <div class="ai-box-head">AI advisor <span class="ai-model">${esc(result.model)}</span></div>
+    <div class="ai-body">${renderMarkdownish(result.text)}</div>
+  </div>`;
+}
+
+// CSP-safe: escape everything first, then re-apply a small markdown subset.
+function renderMarkdownish(text: string): string {
+  const inline = (s: string): string =>
+    esc(s)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+  const out: string[] = [];
+  let inList = false;
+  const closeList = (): void => {
+    if (inList) {
+      out.push('</ul>');
+      inList = false;
+    }
+  };
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    const item = trimmed.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
+    if (item) {
+      if (!inList) {
+        out.push('<ul>');
+        inList = true;
+      }
+      out.push(`<li>${inline(item[1])}</li>`);
+      continue;
+    }
+    closeList();
+    if (!trimmed) {
+      continue;
+    }
+    const heading = trimmed.match(/^#{1,6}\s+(.*)$/);
+    out.push(heading ? `<p class="ai-h">${inline(heading[1])}</p>` : `<p>${inline(trimmed)}</p>`);
+  }
+  closeList();
+  return out.join('');
+}
+
+function advisorItem(insight: Insight, money: (value: number) => string, subscription: boolean): string {
+  const b = savingsBadge(insight, money, subscription);
+  const badge = b
+    ? `<span class="advisor-savings${b.gauge ? ' gauge' : ''}" title="${esc(b.title)}">${esc(b.text)}</span>`
+    : '';
+  const action = insight.action ? `<div class="advisor-action">${esc(insight.action)}</div>` : '';
+  const evidence = insight.evidence ? `<div class="advisor-meta">${esc(insight.evidence)}</div>` : '';
+  return `      <div class="advisor-item sev-${esc(insight.severity)}">
+        <div class="advisor-head"><span class="advisor-title">${esc(insight.title)}</span>${badge}</div>
+        <div class="advisor-detail">${esc(insight.detail)}</div>
+        ${action}
+        ${evidence}
+      </div>`;
 }
 
 function extraUsageSection(extra: ExtraUsage | undefined): string {
@@ -179,7 +299,7 @@ function barRow(label: string, window: LimitWindow): string {
   const pct = Math.round(window.utilization);
   const width = Math.min(100, Math.max(0, pct));
   const reset = formatReset(window.resetsAt);
-  const sub = reset ? `\n        <div class="bar-sub">${reset}</div>` : '';
+  const sub = reset ? `\n        <div class="bar-sub">${esc(reset)}</div>` : '';
   return `      <div class="bar-row">
         <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
         <div class="bar-track"><div class="bar-fill ${severityClass(window.severity)}" style="width:${width}%"></div></div>${sub}
@@ -210,15 +330,19 @@ function windowData(title: string, records: UsageRecord[], groupingMode: string)
   };
 }
 
-function card(win: WindowData, money: (value: number) => string): string {
+function card(win: WindowData, money: (value: number) => string, subscription: boolean): string {
   const t = win.summary.tokens;
   const total = t.input + t.output + t.cacheWrite + t.cacheRead;
   const row = (label: string, value: number): string =>
     `<tr><td>${label}</td><td class="num">${value.toLocaleString('en-US')}</td></tr>`;
   const messages = `${win.summary.messageCount.toLocaleString('en-US')} messages · ${Math.round(cacheHitRate(t))}% cache hit`;
+  const apiNote = subscription
+    ? `<div class="cost-note" title="Estimated at pay-as-you-go API rates. On a subscription you pay a flat fee, so this gauges usage, not a bill.">≈ API-equivalent</div>`
+    : '';
   return `    <section class="card">
       <h2>${win.title}</h2>
       <div class="cost">${money(win.summary.costUsd)}</div>
+      ${apiNote}
       <div class="messages">${messages}</div>
       <table>
         ${row('Input', t.input)}
@@ -468,6 +592,7 @@ function shellHtml(webview: vscode.Webview): string {
     .card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 1rem 1.25rem; background: var(--vscode-editorWidget-background); }
     .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin: 0 0 0.5rem; }
     .cost { font-size: 1.8rem; font-weight: 600; }
+    .cost-note { font-size: 0.7rem; opacity: 0.5; margin: -0.1rem 0 0.35rem; cursor: help; }
     .messages { opacity: 0.7; margin-bottom: 0.75rem; font-size: 0.85rem; }
     .composition { margin-top: 0.7rem; }
     .comp-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--vscode-panel-border); }
@@ -501,6 +626,38 @@ function shellHtml(webview: vscode.Webview): string {
     .bar-fill.error { background: var(--vscode-charts-red, #d33); }
     .bar-sub { margin-top: 0.2rem; font-size: 0.78rem; opacity: 0.6; }
     .limits-age { margin-top: 0.7rem; font-size: 0.78rem; opacity: 0.55; }
+    .advisor { margin: 0 0 1.75rem; }
+    .advisor h2.section { margin-top: 0; }
+    .advisor-list { display: flex; flex-direction: column; gap: 0.6rem; max-width: 640px; }
+    .advisor-item { border: 1px solid var(--vscode-panel-border); border-left-width: 3px; border-radius: 5px; padding: 0.6rem 0.85rem; background: var(--vscode-editorWidget-background); }
+    .advisor-item.sev-warning { border-left-color: var(--vscode-charts-red, #d33); }
+    .advisor-item.sev-tip { border-left-color: var(--vscode-charts-yellow, #d7a000); }
+    .advisor-item.sev-info { border-left-color: var(--vscode-charts-blue, #4e95d9); }
+    .advisor-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; }
+    .advisor-title { font-weight: 600; font-size: 0.9rem; }
+    .advisor-savings { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--vscode-charts-green, #5db075); white-space: nowrap; }
+    .advisor-savings.gauge { color: var(--vscode-foreground); opacity: 0.6; }
+    .advisor-detail { font-size: 0.84rem; opacity: 0.85; margin-top: 0.3rem; line-height: 1.45; }
+    .advisor-action { font-size: 0.82rem; margin-top: 0.4rem; }
+    .advisor-meta { font-size: 0.74rem; opacity: 0.55; margin-top: 0.35rem; font-variant-numeric: tabular-nums; }
+    .advisor-empty { font-size: 0.85rem; opacity: 0.65; }
+    .advisor-note { font-size: 0.76rem; opacity: 0.55; margin-top: 0.7rem; max-width: 640px; line-height: 1.4; }
+    .advisor-head-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+    .advisor-head-row h2.section { margin: 0; }
+    .advisor-explain { font: inherit; font-size: 0.8rem; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 0; border-radius: 4px; padding: 0.3rem 0.8rem; cursor: pointer; }
+    .advisor-explain:hover { background: var(--vscode-button-hoverBackground); }
+    .advisor-explain:disabled { opacity: 0.6; cursor: default; }
+    .ai-pending { font-size: 0.84rem; opacity: 0.7; margin: 0.75rem 0 0; max-width: 640px; }
+    .ai-box { margin: 0.75rem 0 0; max-width: 640px; border: 1px solid var(--vscode-panel-border); border-left: 3px solid var(--vscode-charts-blue, #4e95d9); border-radius: 5px; padding: 0.75rem 0.95rem; background: var(--vscode-editorWidget-background); }
+    .ai-box.ai-error { border-left-color: var(--vscode-charts-red, #d33); font-size: 0.84rem; }
+    .ai-box-head { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-bottom: 0.4rem; }
+    .ai-model { text-transform: none; letter-spacing: 0; opacity: 0.8; }
+    .ai-body { font-size: 0.86rem; line-height: 1.5; }
+    .ai-body p { margin: 0 0 0.5rem; }
+    .ai-body p.ai-h { font-weight: 600; margin-top: 0.6rem; }
+    .ai-body ul { margin: 0 0 0.5rem; padding-left: 1.2rem; }
+    .ai-body li { margin: 0.15rem 0; }
+    .ai-body code { background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.18)); padding: 0 0.25rem; border-radius: 3px; }
     .trend { margin: 1.9rem 0 0; }
     .trend-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
     .trend-head h2.section { margin: 0; }
@@ -528,6 +685,8 @@ function shellHtml(webview: vscode.Webview): string {
 <body>
   <h1>Claude Code Usage</h1>
   <div id="limits"></div>
+  <div id="advisor"></div>
+  <div id="advisor-ai"></div>
   <div id="cards" class="grid"></div>
   <section class="trend">
     <div class="trend-head">
@@ -565,6 +724,8 @@ function shellHtml(webview: vscode.Webview): string {
     let charts = null;
     const tablesEl = document.getElementById('tables');
     const chartEl = document.getElementById('chart');
+    const advisorEl = document.getElementById('advisor');
+    const aiEl = document.getElementById('advisor-ai');
     const tabButtons = Array.from(document.querySelectorAll('#tabs button'));
     const periodButtons = Array.from(document.querySelectorAll('#trend-period button'));
     const metricButtons = Array.from(document.querySelectorAll('#trend-metric button'));
@@ -623,9 +784,23 @@ function shellHtml(webview: vscode.Webview): string {
       });
       rows.forEach((r) => tbody.appendChild(r));
     });
+    advisorEl.addEventListener('click', (event) => {
+      const btn = event.target.closest('#advisor-explain');
+      if (!btn || !advisorEl.contains(btn)) {
+        return;
+      }
+      btn.disabled = true;
+      aiEl.innerHTML = '<div class="ai-pending">Analyzing your usage…</div>';
+      vscode.postMessage({ type: 'explainWithAI' });
+    });
     window.addEventListener('message', (event) => {
       const data = event.data;
+      if (data && data.type === 'aiResult') {
+        aiEl.innerHTML = data.html || '';
+        return;
+      }
       document.getElementById('limits').innerHTML = data.limitsHtml || '';
+      document.getElementById('advisor').innerHTML = data.advisorHtml || '';
       document.getElementById('cards').innerHTML = data.cardsHtml;
       charts = data.charts;
       tables = data.tables;

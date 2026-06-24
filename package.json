@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -49,6 +49,14 @@
       {
         "command": "claudeCodeUsageTracker.refresh",
         "title": "Claude Code Usage Tracker: Refresh"
+      },
+      {
+        "command": "claudeCodeUsageTracker.setAiApiKey",
+        "title": "Claude Code Usage Tracker: Set Anthropic API Key (AI Advisor)"
+      },
+      {
+        "command": "claudeCodeUsageTracker.clearAiApiKey",
+        "title": "Claude Code Usage Tracker: Clear Anthropic API Key (AI Advisor)"
       }
     ],
     "configuration": {
@@ -169,6 +177,21 @@
           "type": "boolean",
           "default": false,
           "description": "Model-cost advisor (off by default): when recent turns show heavy spend on an expensive model for little output, show a one-time, dismissible hint suggesting a cheaper model for routine work. Requires Predictive Alerts to be enabled."
+        },
+        "claudeCodeUsageTracker.advisor.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Advisor panel in the dashboard: ranked, money-quantified tips to cut waste this month — routing routine turns to a cheaper model, improving prompt-cache reuse, reining in oversized context, and a month-end spend forecast. Computed entirely from your local usage data; nothing leaves your machine."
+        },
+        "claudeCodeUsageTracker.advisor.ai.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-6",
+          "description": "Model used by the Advisor's 'Explain with AI' button (which calls Anthropic with your own API key). Sonnet is a capable, low-cost default; use an Opus id for deeper analysis at higher cost."
+        },
+        "claudeCodeUsageTracker.advisor.ai.includePrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "When using 'Explain with AI', also send a small, truncated sample of your recent Claude Code prompts so the advisor can coach on prompt quality. OFF by default — when off, only usage metadata (token/cost/cache numbers, no prompt text) is sent. You are asked to confirm each time prompts would be included."
         }
       }
     }
