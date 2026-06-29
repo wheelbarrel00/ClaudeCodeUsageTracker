@@ -122,7 +122,7 @@ function buildPayload(
   records: UsageRecord[],
   limits: PlanLimits | undefined,
   aiEnabled: boolean
-): { limitsHtml: string; advisorHtml: string; cardsHtml: string; charts: ChartSet; tables: Record<string, string> } {
+): { limitsHtml: string; advisorHtml: string; cardsHtml: string; grandTotalHtml: string; charts: ChartSet; tables: Record<string, string> } {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const decimals = cfg.get<number>('decimalPlaces', 2);
   const currency = cfg.get<string>('currency', 'USD');
@@ -138,6 +138,7 @@ function buildPayload(
   };
   const order = ['today', 'month', 'all'];
   const cardsHtml = order.map((key) => card(windows[key], money, subscription)).join('\n');
+  const grandTotalHtml = grandTotalStrip(windows.all, money, subscription);
   const tables: Record<string, string> = {};
   for (const key of order) {
     tables[key] =
@@ -156,7 +157,7 @@ function buildPayload(
         subscription
       )
     : '';
-  return { limitsHtml, advisorHtml, cardsHtml, charts: chartSet(records, money), tables };
+  return { limitsHtml, advisorHtml, cardsHtml, grandTotalHtml, charts: chartSet(records, money), tables };
 }
 
 function advisorSection(
@@ -353,6 +354,22 @@ function card(win: WindowData, money: (value: number) => string, subscription: b
       </table>
       ${compositionBar(win.costParts)}
     </section>`;
+}
+
+function grandTotalStrip(all: WindowData, money: (value: number) => string, subscription: boolean): string {
+  const activeMs = all.sessions.reduce((sum, session) => sum + session.activeMs, 0);
+  const items = [
+    { value: money(all.summary.costUsd), label: subscription ? 'Total spend (≈ API)' : 'Total spend' },
+    { value: all.summary.messageCount.toLocaleString('en-US'), label: 'Total messages' },
+    { value: formatDuration(activeMs), label: 'Active time' },
+  ];
+  const cells = items
+    .map((it) => `<div class="gt-item"><div class="gt-value">${esc(it.value)}</div><div class="gt-label">${esc(it.label)}</div></div>`)
+    .join('');
+  return `<section class="grand-total" title="All-time totals across every session">
+    <div class="gt-head">Grand total · all time</div>
+    <div class="gt-grid">${cells}</div>
+  </section>`;
 }
 
 function cacheHitRate(t: TokenCounts): number {
@@ -604,6 +621,12 @@ function shellHtml(webview: vscode.Webview): string {
     .comp-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.7rem; margin-top: 0.45rem; font-size: 0.72rem; opacity: 0.75; }
     .comp-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
     .comp-legend .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+    .grand-total { margin: 1.25rem 0 0; border: 1px solid var(--vscode-panel-border); border-left: 3px solid var(--vscode-charts-green, #5db075); border-radius: 6px; padding: 0.85rem 1.25rem; background: var(--vscode-editorWidget-background); }
+    .gt-head { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.6; margin-bottom: 0.55rem; }
+    .gt-grid { display: flex; flex-wrap: wrap; gap: 0.9rem 2.75rem; }
+    .gt-item { display: flex; flex-direction: column; }
+    .gt-value { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+    .gt-label { font-size: 0.72rem; opacity: 0.6; margin-top: 0.2rem; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     td, th { padding: 0.15rem 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -688,6 +711,7 @@ function shellHtml(webview: vscode.Webview): string {
   <div id="advisor"></div>
   <div id="advisor-ai"></div>
   <div id="cards" class="grid"></div>
+  <div id="grand-total"></div>
   <section class="trend">
     <div class="trend-head">
       <h2 class="section">Trend</h2>
@@ -802,6 +826,7 @@ function shellHtml(webview: vscode.Webview): string {
       document.getElementById('limits').innerHTML = data.limitsHtml || '';
       document.getElementById('advisor').innerHTML = data.advisorHtml || '';
       document.getElementById('cards').innerHTML = data.cardsHtml;
+      document.getElementById('grand-total').innerHTML = data.grandTotalHtml || '';
       charts = data.charts;
       tables = data.tables;
       paintChart();

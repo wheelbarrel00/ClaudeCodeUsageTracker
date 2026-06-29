@@ -1,4 +1,7 @@
 import * as https from 'https';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { mapUsageData, PlanLimits } from './limitsReader';
 import { readOAuth, isExpiring, OAuthCredentials } from './credentials';
 
@@ -17,13 +20,61 @@ interface HttpResult {
   headers: Record<string, string | string[] | undefined>;
 }
 
-// Module-level, so the throttle and refreshed token are per extension host.
-// With N open windows that is ~N× the request rate against the same endpoint;
-// the min-interval floor below keeps a single window well within safe limits.
+// Per extension host; a successful fetch is also published to a shared file all
+// windows read, so N windows make ~one request between them instead of N (avoiding 429s).
 let memToken: { accessToken: string; expiresAt?: number } | undefined;
 let liveCache: { data: any; at: number } | undefined;
 let lastAttemptAt = 0;
 let backoffUntil = 0;
+
+const SHARED_SKEW_MS = 60 * 1000;
+let sharedWriteSeq = 0;
+
+function sharedCachePath(): string {
+  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  return path.join(base, '.ccut', 'usage-shared.json');
+}
+
+export function parseSharedCache(text: string, now: number): { data: any; at: number } | undefined {
+  let raw: any;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const at = typeof raw?.at === 'number' ? raw.at : undefined;
+  if (raw?.v !== 1 || at === undefined || !raw.data || at > now + SHARED_SKEW_MS) {
+    return undefined;
+  }
+  return { data: raw.data, at };
+}
+
+function readSharedCache(now: number): { data: any; at: number } | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(sharedCachePath(), 'utf8');
+  } catch {
+    return undefined;
+  }
+  return parseSharedCache(text, now);
+}
+
+function writeSharedCache(entry: { data: any; at: number }): void {
+  const file = sharedCachePath();
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `usage-shared.${process.pid}.${sharedWriteSeq++}.tmp`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, data: entry.data, at: entry.at, writer: process.pid }));
+    fs.renameSync(tmp, file);
+  } catch {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // ignore
+    }
+  }
+}
 
 // Always settles within REQUEST_TIMEOUT_MS. A premature socket close can fire
 // neither 'end' nor 'error', and req.setTimeout (socket-idle) cannot rescue an
@@ -167,17 +218,22 @@ function usageHeaders(token: string): Record<string, string> {
 // roll-over stays current without re-hitting the endpoint.
 export async function fetchLiveLimits(minIntervalMs: number): Promise<PlanLimits | undefined> {
   const now = Date.now();
-  if (liveCache && now - liveCache.at < minIntervalMs) {
-    return mapUsageData(liveCache.data, liveCache.at);
+  const shared = readSharedCache(now);
+  if (shared && (!liveCache || shared.at > liveCache.at)) {
+    liveCache = shared;
   }
-  // Throttle network attempts whether they succeed or fail, so a rate-limited
-  // or unreachable endpoint is not retried on every refresh tick.
+  const cached = (): PlanLimits | undefined =>
+    liveCache ? mapUsageData(liveCache.data, liveCache.at) : undefined;
+  // Fresh cache from any window satisfies us without a network call.
+  if (liveCache && now - liveCache.at < minIntervalMs) {
+    return cached();
+  }
   if (now < backoffUntil || now - lastAttemptAt < minIntervalMs) {
-    return undefined;
+    return cached();
   }
   const oauth = readOAuth();
   if (!oauth) {
-    return undefined;
+    return cached();
   }
   lastAttemptAt = Date.now();
   let token = await resolveToken(oauth);
@@ -192,29 +248,30 @@ export async function fetchLiveLimits(minIntervalMs: number): Promise<PlanLimits
       }
     }
   } catch {
-    return undefined;
+    return cached();
   }
   if (result.status === 429) {
     backoffUntil = Date.now() + retryAfterMs(result.headers, minIntervalMs);
-    return undefined;
+    return cached();
   }
   if (result.status !== 200) {
-    return undefined;
+    return cached();
   }
   let parsed: any;
   try {
     parsed = JSON.parse(result.body);
   } catch {
-    return undefined;
+    return cached();
   }
   if (!parsed || parsed.type === 'error') {
-    return undefined;
+    return cached();
   }
   const at = Date.now();
   const mapped = mapUsageData(parsed, at);
   if (!mapped) {
-    return undefined;
+    return cached();
   }
   liveCache = { data: parsed, at };
+  writeSharedCache(liveCache);
   return mapped;
 }

@@ -98,18 +98,23 @@ async function refresh(): Promise<void> {
 
 async function getPlanLimits(): Promise<PlanLimits | undefined> {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  let live: PlanLimits | undefined;
   if (cfg.get<boolean>('useLiveApi', true)) {
     const minInterval = Math.max(60, cfg.get<number>('liveApiMinIntervalSeconds', 180)) * 1000;
     try {
-      const live = await withTimeout(fetchLiveLimits(minInterval), 30000);
-      if (live) {
-        return live;
-      }
+      live = await withTimeout(fetchLiveLimits(minInterval), 30000);
     } catch {
       // fall back to the on-disk cache
     }
   }
-  return loadPlanLimits();
+  return freshest(live, await loadPlanLimits());
+}
+
+function freshest(a?: PlanLimits, b?: PlanLimits): PlanLimits | undefined {
+  if (!a || !b) {
+    return a ?? b;
+  }
+  return (b.fetchedAt ?? 0) > (a.fetchedAt ?? 0) ? b : a;
 }
 
 // Backstop so a stuck live fetch can never leave refreshInFlight wedged.

@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.3.0] - 2026-06-28
+
+### Added
+- **Grand total** — a strip beneath the Today / This Month / All Time cards in the
+  dashboard, summing your **all-time spend, messages, and active time** in one place.
+  Active time reuses the session active-time measure (idle gaps longer than 15 minutes
+  are excluded), so it reflects time actually spent working, not wall-clock. On a
+  subscription the spend is labeled "≈ API" to match the rest of the dashboard.
+
+### Fixed
+- **Plan limits now stay live across multiple editor windows.** With more than one
+  window open (and especially on a Max plan), each window used to poll Anthropic's
+  usage endpoint independently; the extra traffic could get a window rate-limited
+  (HTTP 429) and stuck showing a stale "Updated Nd ago" reading until you reloaded it.
+  A successful fetch is now published to a small shared file that every window reads,
+  so all open windows share one fetch (~one request between them instead of one each),
+  and a rate-limited window shows a sibling window's fresh data instead of falling back
+  to a stale cache. The shared file holds only the usage figures and a timestamp — never
+  your credentials — and lives alongside Claude's own files (honoring `CLAUDE_CONFIG_DIR`)
+  so Cursor and VS Code on the same account coordinate too.
+
 ## [1.2.0] - 2026-06-23
 
 ### Added
