@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.3.1] - 2026-06-29
+
+### Changed
+- **Per-table totals.** Replaced the all-time grand-total strip (added in 1.3.0) with a
+  **totals row at the foot of each dashboard breakdown** — By model, By project, and By
+  branch now sum their Messages, Tokens, and Cost columns, in the same format as the rows
+  above. The All Time card already serves as the grand total, so the separate strip was
+  redundant; per-section totals are more useful.
+
 ## [1.3.0] - 2026-06-28
 
 ### Added
