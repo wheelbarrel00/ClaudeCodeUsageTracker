@@ -4,6 +4,42 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.4.0] - 2026-07-13
+
+### Fixed
+- **Output tokens (and cost) were undercounted by ~20%.** Claude Code writes an assistant
+  message to its transcript once per streamed content block; the interim lines carry a
+  placeholder `output_tokens` and only the final line reports the settled figure. The
+  extension was keeping the *first* line of each message and discarding the rest, so it
+  banked the placeholder and threw the real output count away. It now takes the final,
+  settled usage. **Your output-token and cost figures will step up after this release** —
+  the new numbers are the correct ones, not an increase in your actual usage.
+
+### Changed
+- **The 5-hour pace meter no longer cries wolf.** It was a bare extrapolation
+  (`utilization ÷ elapsed`), which is a knife-edge at exactly the moment it matters: being
+  a point or two ahead of an even pace rendered as a confident `→ 104%`, and one idle
+  minute later as `→ 99%`. Three changes:
+  - **It waits until the window is half over.** The meter was shown from 10% elapsed, but
+    the breach warning already refused to fire before 50% *because the projection isn't
+    reliable before then* — so the extension was printing a number it was too suspicious of
+    to warn on. Both now share one gate. Early in a window you see just `5h 15%`.
+  - **New `· on pace` reading.** Within ten points of 100% the projection is noise, so the
+    meter now says `5h 53% · on pace` instead of committing to a number that flips on the
+    next refresh. Clearly under or over pace still shows the figure (`5h 23% → 45%`,
+    `5h 95% → 119%`). The breach warning clears the same band, so a popup can no longer
+    contradict an "on pace" meter.
+  - **It hides when you stop.** The meter ignored whether you were still burning, so a
+    heavy start followed by an hour of idling kept projecting a breach. It now disappears
+    when you're idle, like the weekly ETA and the warnings already did.
+- **The burn readout says what it actually measures.** `Burn: 1.6M tok/min` was ~95% cache
+  reads — a long session re-reads its whole context every turn — so the headline tracked
+  context size × turn count rather than anything you consume, and it sat under the "Claude
+  plan limits" heading as though it drove the pace projection (it never did). It is now its
+  own tooltip block, split into new work versus context re-reads, with the rate labeled as
+  an API-equivalent estimate on a subscription, matching the dashboard:
+  `49.5k new tok/min · 849.1k/min context re-read · ≈ $0.80/min at API rates`.
+
 ## [1.3.1] - 2026-06-29
 
 ### Changed

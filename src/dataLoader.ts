@@ -20,7 +20,7 @@ export interface ContextInfo {
 
 const CONTEXT_RECENCY_MS = 5 * 60 * 60 * 1000;
 
-interface ParsedEntry {
+export interface ParsedEntry {
   key: string;
   record: UsageRecord;
 }
@@ -82,7 +82,8 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
 
   const messageId = typeof message.id === 'string' ? message.id : '';
   const requestId = typeof entry.requestId === 'string' ? entry.requestId : '';
-  // each message is logged once per content block, all repeating the same usage
+  // A message is logged once per streamed content block; the interim lines carry a
+  // placeholder output_tokens, so duplicates must resolve to the last, settled occurrence.
   let key = '';
   if (messageId || requestId) {
     key = `${messageId}|${requestId}`;
@@ -117,8 +118,12 @@ async function parseFile(file: string): Promise<ParsedEntry[]> {
   } catch {
     return [];
   }
+  return parseEntries(text);
+}
+
+export function parseEntries(text: string): ParsedEntry[] {
   const entries: ParsedEntry[] = [];
-  const seen = new Set<string>();
+  const index = new Map<string, number>();
   let aiTitle: string | undefined;
   let lastPrompt: string | undefined;
   for (const line of text.split('\n')) {
@@ -148,11 +153,13 @@ async function parseFile(file: string): Promise<ParsedEntry[]> {
     if (!parsed) {
       continue;
     }
-    if (parsed.key && seen.has(parsed.key)) {
-      continue;
-    }
     if (parsed.key) {
-      seen.add(parsed.key);
+      const at = index.get(parsed.key);
+      if (at !== undefined) {
+        entries[at] = parsed;
+        continue;
+      }
+      index.set(parsed.key, entries.length);
     }
     entries.push(parsed);
   }

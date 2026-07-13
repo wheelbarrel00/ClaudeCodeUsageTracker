@@ -9,6 +9,10 @@ import { estimateCost } from './pricing';
 
 export interface BurnRate {
   tokensPerMin: number;
+  // Cache reads re-count the whole prefix every turn, so on a long session they are ~95% of
+  // tokensPerMin while pricing at 0.1x input. Split out so a headline can exclude them.
+  newTokensPerMin: number;
+  cacheReadPerMin: number;
   costPerMin: number;
   windowTokens: number;
   windowCostUsd: number;
@@ -20,12 +24,17 @@ function totalTokens(t: TokenCounts): number {
   return t.input + t.output + t.cacheWrite + t.cacheRead;
 }
 
+function newTokens(t: TokenCounts): number {
+  return t.input + t.output + t.cacheWrite;
+}
+
 // Average token/cost burn over the trailing window. Records outside
 // (now - windowMs, now] are ignored; the denominator is the full window, so the
 // rate decays to zero as activity stops rather than spiking on a lone old burst.
 export function burnRate(records: UsageRecord[], now: number, windowMs: number): BurnRate {
   const start = now - windowMs;
   let windowTokens = 0;
+  let windowNewTokens = 0;
   let windowCostUsd = 0;
   let recordCount = 0;
   for (const record of records) {
@@ -33,13 +42,22 @@ export function burnRate(records: UsageRecord[], now: number, windowMs: number):
       continue;
     }
     windowTokens += totalTokens(record.tokens);
+    windowNewTokens += newTokens(record.tokens);
     windowCostUsd += estimateCost(record.tokens, record.model);
     recordCount++;
   }
   const minutes = windowMs / 60000;
-  const tokensPerMin = minutes > 0 ? windowTokens / minutes : 0;
-  const costPerMin = minutes > 0 ? windowCostUsd / minutes : 0;
-  return { tokensPerMin, costPerMin, windowTokens, windowCostUsd, windowMs, recordCount };
+  const per = (total: number): number => (minutes > 0 ? total / minutes : 0);
+  return {
+    tokensPerMin: per(windowTokens),
+    newTokensPerMin: per(windowNewTokens),
+    cacheReadPerMin: per(windowTokens - windowNewTokens),
+    costPerMin: per(windowCostUsd),
+    windowTokens,
+    windowCostUsd,
+    windowMs,
+    recordCount,
+  };
 }
 
 // A utilization drop larger than this (percentage points) is read as the window
@@ -53,15 +71,13 @@ const RESET_DROP_PTS = 5;
 export const FIVE_HOUR_PERIOD_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Don't project a limit ETA until at least this fraction of the window has elapsed:
-// early in a window a tiny slice of behavior extrapolates wildly.
-const MIN_ELAPSED_FRACTION = 0.1;
+// Sensitivity is 1/elapsed, so projecting a tenth of the way into a window turns one
+// utilization tick into ten. Only past the halfway mark does the average rate predict.
+const MIN_ELAPSED_FRACTION = 0.5;
 
-// A breach *warning* (popup) needs a far more trustworthy projection than the
-// gauge: only once this fraction of the window has elapsed does the average rate
-// reliably predict the rest. Below it, a heavy-then-idle start would falsely read
-// as "on track to breach" — the early on-pace line is met by any small lead.
-const BREACH_MIN_ELAPSED_FRACTION = 0.5;
+// Within this many points of 100 a single integer tick of the API's utilization swings the
+// projection across the line, so a bare number there is noise. Report "on pace" instead.
+export const ON_PACE_BAND_PTS = 10;
 
 // Milliseconds until utilization reaches 100%, extrapolating the AVERAGE consumption
 // rate over the window so far — rate = utilization / elapsed, where the window
@@ -141,6 +157,14 @@ export function crossedThresholds(utilization: number, thresholds: number[]): nu
   return thresholds
     .filter((threshold) => shown >= threshold)
     .sort((a, b) => a - b);
+}
+
+export function describeProjection(projectedUtil: number): { segment: string; detail: string } {
+  if (Math.abs(projectedUtil - 100) <= ON_PACE_BAND_PTS) {
+    return { segment: '· on pace', detail: 'on pace to use this window fully' };
+  }
+  const pct = Math.round(Math.min(projectedUtil, 999));
+  return { segment: `→ ${pct}%`, detail: `projected ~${pct}% by reset` };
 }
 
 export function formatEta(ms: number): string {
@@ -234,19 +258,16 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
   const fireThreshold = newly.length ? Math.max(...newly) : undefined;
   firedThresholds = Array.from(new Set([...firedThresholds, ...crossed])).sort((a, b) => a - b);
 
-  // "On track" = projected to hit the limit before reset (equivalently, projected
-  // end-of-window % > 100). "At risk" additionally requires enough of the window to
-  // have elapsed for that projection to be trustworthy, so an early heavy-then-idle
-  // start can't read as on-track. The breach popup needs at-risk + recent activity.
-  // The 5h 'projection' meter shows whenever a sane number can be computed (it self-
-  // corrects as you idle); the weekly 'risk' ETA shows only when at-risk and active.
-  const onTrack = predictsBreachBeforeReset(etaMs, resetsAt, now);
-  const elapsed = resetsAt !== undefined ? now - (resetsAt - periodMs) : -1;
-  const trustworthy = elapsed >= BREACH_MIN_ELAPSED_FRACTION * periodMs;
-  const atRisk = onTrack && trustworthy;
+  // Clearing the dead-band keeps the popup from contradicting a meter that reads "on pace".
+  // recentlyActive gates every annotation too: an average rate cannot tell whether you are
+  // still burning, so without it a heavy-then-idle start keeps advertising a breach.
+  const atRisk =
+    predictsBreachBeforeReset(etaMs, resetsAt, now) &&
+    projectedUtil !== undefined &&
+    projectedUtil > 100 + ON_PACE_BAND_PTS;
 
   let annotation: 'projection' | 'eta' | 'none' = 'none';
-  if (etaMode === 'projection' && projectedUtil !== undefined) {
+  if (etaMode === 'projection' && recentlyActive && projectedUtil !== undefined) {
     annotation = 'projection';
   } else if (etaMode === 'risk' && atRisk && recentlyActive && etaMs !== undefined) {
     annotation = 'eta';

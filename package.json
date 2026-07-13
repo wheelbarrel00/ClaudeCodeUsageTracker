@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -142,13 +142,13 @@
         "claudeCodeUsageTracker.predictiveAlerts.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Predictive alerts: estimate when you'll hit the 5-hour and weekly limits from your recent burn rate, show a time-to-limit ETA in the status bar, and warn before you run out. Turn off to disable all prediction features."
+          "description": "Predictive alerts: project where your 5-hour limit lands by reset at your current pace, flag the weekly limit when you're on track to hit it before it resets, and warn before you run out. Forecasts appear once a window is at least half elapsed and you're actively burning. Turn off to disable all prediction features."
         },
         "claudeCodeUsageTracker.predictiveAlerts.windowMinutes": {
           "type": "number",
           "default": 15,
           "minimum": 1,
-          "description": "Trailing window, in minutes, used to measure your burn rate and how fast your plan-limit utilization is rising."
+          "description": "Trailing window, in minutes, for the tooltip's burn-rate readout (new tokens/min, cached context re-reads/min, cost/min) and for deciding whether you are still actively burning. The pace projection is derived from your plan-limit utilization and the wall clock, not from this."
         },
         "claudeCodeUsageTracker.predictiveAlerts.warnThresholds": {
           "type": "array",
@@ -164,17 +164,17 @@
         "claudeCodeUsageTracker.predictiveAlerts.predictBreach": {
           "type": "boolean",
           "default": true,
-          "description": "Also warn when your current pace projects you'll hit a limit before it resets (e.g. \"~20m to the 5-hour limit, before it resets in 1h10m\")."
+          "description": "Also warn when your current pace clearly projects you'll hit a limit before it resets (e.g. \"~20m to the 5-hour limit, before it resets in 1h10m\"). Fires only once the window is half over, you're actively burning, and you're clear of the on-pace band — so it never contradicts a meter reading `· on pace`."
         },
         "claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta": {
           "type": "boolean",
           "default": true,
-          "description": "Show a 5-hour pace meter in the status bar: the projected end-of-window utilization at your current pace (e.g. `5h 24% → 48%`). A live 'how hard am I working' gauge that climbs toward 100% as you burn faster. Turn off to hide it. (Set both this and Show Weekly Eta off to hide all forecasts.)"
+          "description": "Show a 5-hour pace meter in the status bar: the projected end-of-window utilization at your current pace (e.g. `5h 23% → 45%`). A live 'how hard am I working' gauge that climbs toward 100% as you burn faster. It appears once the window is half over and you're actively burning, and reads `· on pace` within ten points of 100%, where the projection is too noisy to commit to a number. Turn off to hide it. (Set both this and Show Weekly Eta off to hide all forecasts.)"
         },
         "claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta": {
           "type": "boolean",
           "default": true,
-          "description": "Show a time-to-limit ETA for the weekly window — but only when your pace would actually hit the weekly limit before it resets (the weekly number moves over days, so a constant readout would be noisy). Turn off to hide the weekly ETA entirely."
+          "description": "Show a time-to-limit ETA for the weekly window — but only when your pace is clearly on track to hit the weekly limit before it resets, you're actively burning, and the week is at least half elapsed (the weekly number moves over days, so a constant readout would be noisy). Turn off to hide the weekly ETA entirely."
         },
         "claudeCodeUsageTracker.predictiveAlerts.modelAdvisor.enabled": {
           "type": "boolean",

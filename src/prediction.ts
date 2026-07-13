@@ -7,6 +7,7 @@ import {
   emptyWindowState,
   sanitizeThresholds,
   modelAdvice,
+  describeProjection,
   formatEta,
   FIVE_HOUR_PERIOD_MS,
   SEVEN_DAY_PERIOD_MS,
@@ -129,9 +130,7 @@ export class PredictionController {
     let segment: string | undefined;
     let detail: string | undefined;
     if (outcome.annotation === 'projection' && outcome.projectedUtil !== undefined) {
-      const pct = Math.round(Math.min(outcome.projectedUtil, 999));
-      segment = `→ ${pct}%`;
-      detail = `projected ~${pct}% by reset`;
+      ({ segment, detail } = describeProjection(outcome.projectedUtil));
     } else if (outcome.annotation === 'eta' && outcome.etaMs !== undefined) {
       const eta = formatEta(outcome.etaMs);
       segment = `· ${eta}`;

@@ -3,6 +3,7 @@ import { UsageSummary } from './types';
 import { ContextInfo } from './dataLoader';
 import { PlanLimits, LimitWindow, ScopedLimit, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
 import { PredictionView } from './prediction';
+import { isSubscription } from './credentials';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -44,7 +45,8 @@ export class StatusBarController {
 
     const extra = showExtraUsage && limits?.extraUsage?.isEnabled ? limits.extraUsage : undefined;
     const pred = prediction?.enabled ? prediction : undefined;
-    const predTip = pred ? predictionTooltip(pred, currency, decimals) : undefined;
+    const subscription = isSubscription() || !!(limits?.fiveHour || limits?.sevenDay);
+    const predTip = pred ? predictionTooltip(pred, currency, decimals, subscription) : undefined;
     const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined, extra, predTip);
 
     const live = showLimits ? limits : undefined;
@@ -124,24 +126,32 @@ function severityColor(severity?: string): vscode.ThemeColor | undefined {
 interface PredictionTooltip {
   fiveHourDetail?: string;
   sevenDayDetail?: string;
-  burnLine?: string;
+  burnLines?: string[];
 }
 
-function predictionTooltip(pred: PredictionView, currency: string, decimals: number): PredictionTooltip {
-  let burnLine: string | undefined;
+function predictionTooltip(
+  pred: PredictionView,
+  currency: string,
+  decimals: number,
+  subscription: boolean
+): PredictionTooltip {
+  let burnLines: string[] | undefined;
   const burn = pred.burn;
   if (burn && burn.recordCount > 0) {
     const minutes = Math.round(burn.windowMs / 60000);
-    const tokens = `${formatTokens(Math.round(burn.tokensPerMin))} tok/min`;
-    const cost = `${formatCurrency(burn.costPerMin, currency, decimals)}/min`;
-    burnLine = `Burn: ${tokens}  ·  ${cost}  ·  last ${minutes}m`;
+    const rate = `${formatCurrency(burn.costPerMin, currency, decimals)}/min`;
+    const parts = [
+      `${formatTokens(Math.round(burn.newTokensPerMin))} new tok/min`,
+      `${formatTokens(Math.round(burn.cacheReadPerMin))}/min context re-read`,
+      subscription ? `≈ ${rate} at API rates` : rate,
+    ];
+    burnLines = [`Burn · last ${minutes}m`, parts.join('  ·  ')];
   }
-  return { fiveHourDetail: pred.fiveHour?.detail, sevenDayDetail: pred.sevenDay?.detail, burnLine };
+  return { fiveHourDetail: pred.fiveHour?.detail, sevenDayDetail: pred.sevenDay?.detail, burnLines };
 }
 
 function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraUsage, pred?: PredictionTooltip): string {
   const lines: string[] = [];
-  let burnShown = false;
   if (limits) {
     const limitLines: string[] = [];
     if (limits.fiveHour) {
@@ -155,21 +165,19 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraU
     }
     if (limitLines.length) {
       lines.push('Claude plan limits', ...limitLines);
-      if (pred?.burnLine) {
-        lines.push(pred.burnLine);
-        burnShown = true;
-      }
       const age = formatAge(limits.fetchedAt);
       if (age) {
         lines.push(`Updated ${age}`);
       }
     }
   }
-  if (pred?.burnLine && !burnShown) {
+  // Its own block: the burn rate does not feed the pace projection, which is derived from
+  // the API's utilization and the wall clock.
+  if (pred?.burnLines?.length) {
     if (lines.length) {
       lines.push('');
     }
-    lines.push(pred.burnLine);
+    lines.push(...pred.burnLines);
   }
   if (context) {
     if (lines.length) {
