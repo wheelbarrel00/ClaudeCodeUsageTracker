@@ -17,12 +17,20 @@
 </p>
 
 <p align="center">
+  <img src="images/status-tooltip.png" alt="Status-bar tooltip near the end of the 5-hour window (89%), showing plan limits, burn rate, and context" width="522" />
+</p>
+
+<p align="center">
+  <sub>Hover any status-bar item for the full breakdown &mdash; here near the end of the 5&#8209;hour window at <b>89%</b>: each plan limit with its reset time and the <code>&middot; on pace</code> reading, your burn rate split into new work versus cached context re-reads, and context-window fill.</sub>
+</p>
+
+<p align="center">
   <img src="images/stats.png" alt="Claude Code Usage dashboard with the Advisor panel" width="900" />
 </p>
 
 ## Features
 
-- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), each led by a Claude sunburst that turns green / yellow / red as Claude flags that window, plus the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently. Click any of them to open the dashboard.
+- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), each led by a Claude sunburst that turns green / yellow / red at your own warning thresholds (`predictiveAlerts.warnThresholds`, 75% / 90% by default), plus the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently. Click any of them to open the dashboard.
 - **Plan limits** &mdash; real 5h / weekly usage with reset times and per-model scoped windows, shown as bars in the dashboard. Fetched live from Anthropic's usage endpoint (the same call Claude Code makes) so the numbers stay current even mid-session, with Claude Code's on-disk cache as a fallback. Multiple open editor windows share a single fetch, so opening more windows won't rate-limit you onto a stale reading.
 - **Predictive alerts** &mdash; forecasts when you'll hit a limit and warns you before you do. The 5-hour limit gets a live **pace meter**: `5h 42% → 53%` means *at your current rate you're on track to finish the 5-hour window at 53%* (it climbs toward 100% as you push harder, so you can see at a glance whether you're cruising or about to run out). It appears once the window is half over and you're actively burning, and reads `· on pace` near 100% rather than committing to a knife-edge number &mdash; so it doesn't cry wolf. The weekly limit shows a time-to-limit **ETA** only when you're genuinely on track to breach it. **Notifications** fire at configurable thresholds (75% / 90%) and when your pace is clearly set to breach a window before it resets, and the tooltip shows your live **burn rate**, split into new work versus cached context re-reads (a long session re-reads its whole context every turn, which otherwise dominates the figure and makes it meaningless). An optional, off-by-default **model-cost advisor** suggests a cheaper model when you're burning an expensive one on routine turns. On by default and 100% local &mdash; configure under `predictiveAlerts.*`.
 - **Extra usage (pay-as-you-go)** &mdash; optional, **off by default**: when your account has pay-as-you-go enabled, your spend beyond plan limits is shown in the status bar (`extra $3.50 / $50.00`), the tooltip, and the dashboard. Turn on with `showExtraUsage`.
@@ -52,10 +60,11 @@ with the OAuth token in `~/.claude/.credentials.json`. This keeps the 5-hour and
 weekly figures current even during a long session, when Claude Code's own on-disk
 cache (`~/.claude/usage-cache.json`) can sit hours stale. If the live request
 fails for any reason, the extension falls back to that cache file; a window whose
-reset time has already passed is shown as `—` (muted) with an "Updated X ago"
-note so a stale reading is never styled like a live one. The utilization figures
-are already 0&ndash;100, so they're shown as-is, mirroring the server's severity
-for the warning tint. The context-window figure is the most recent request's
+reset time has already passed is treated as rolled over (a fresh `0%`) with an
+"Updated X ago" note so a stale reading is never styled like a live one. The
+utilization figures are already 0&ndash;100, so they're shown as-is; the green /
+yellow / red tint follows your own `warnThresholds` (an explicit warning from the
+server can raise it, never lower it). The context-window figure is the most recent request's
 prompt size (input + cache) over the model's window &mdash; 200K, or 1M when the
 prompt or model marks the long-context tier.
 
@@ -101,16 +110,17 @@ length gives the start), so each window is judged on its own timescale &mdash; t
 5-hour window over hours, the 7-day window over days.
 
 The **5-hour** window shows a live pace meter: the projected end-of-window utilization at
-your current rate (`5h 23% → 45%`), climbing toward 100% as you burn faster. It is
-deliberately cautious about when it speaks. It stays silent for the first half of the
-window, because a projection divides by the elapsed time and a tenth of the way in that
-turns one percentage-point tick into ten (`5h 15%` would read `→ 150%`). It stays silent
-while you're idle, because an average rate can't tell whether you're *still* burning &mdash;
-otherwise a heavy start followed by an hour of nothing would keep projecting a breach. And
-within ten points of 100% it reads `· on pace` rather than a number, because there the
-projection is a coin flip that flips back on the next refresh. The **weekly** window stays
-quiet and shows a time-to-limit ETA only once you're on a trustworthy track to breach it
-before reset (its figure moves over days, so a constant readout would be noise).
+your current rate (`5h 23% → 45%`), climbing toward 100% as you burn faster. Early in the
+window it *damps* that projection toward your current utilization, because the raw
+extrapolation divides by the elapsed time and a tenth of the way in one percentage-point
+tick becomes ten (`5h 15%` would read a raw `→ 150%`); the meter firms up to the plain
+projection by the time the window is half over. It stays visible while you're idle &mdash;
+there it simply eases downward on its own &mdash; but the breach *popup* still needs recent
+activity, so a heavy start followed by an hour of nothing won't keep warning you. And within
+ten points of 100% it reads `· on pace` rather than a number, because there the projection
+is a coin flip that flips back on the next refresh. The **weekly** window stays quiet and
+shows a time-to-limit ETA only once you're on a trustworthy track to breach it before reset
+(its figure moves over days, so a constant readout would be noise).
 
 Threshold and pace-based **warnings** fire once per window (re-arming when it resets), only
 while you're actually burning, and &mdash; for the pace warning &mdash; only once you're
@@ -163,7 +173,7 @@ figures already on screen and makes no extra network calls.
 | `claudeCodeUsageTracker.advisor.ai.model` | `claude-sonnet-4-6` | Model used by the Advisor's "Explain with AI" button (called with your own API key). Sonnet is a low-cost default; use an Opus id for deeper analysis. |
 | `claudeCodeUsageTracker.advisor.ai.includePrompts` | `false` | When using "Explain with AI", also send a small, truncated sample of your recent prompts so it can coach on prompt quality. Off by default (metadata only); you confirm each time prompts would be included. |
 | `claudeCodeUsageTracker.predictiveAlerts.enabled` | `true` | Master switch for predictive alerts (ETA, warnings, advisor). |
-| `claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta` | `true` | Show the 5-hour pace meter (projected end-of-window %, e.g. `5h 23% → 45%`, or `· on pace` near 100%) in the status bar. Appears once the window is half over and you're actively burning. |
+| `claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta` | `true` | Show the 5-hour pace meter (projected end-of-window %, e.g. `5h 23% → 45%`, or `· on pace` near 100%) in the status bar. Shown from early in the window (damped toward your current % at first, firming up by the half-mark) and stays visible while idle. |
 | `claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta` | `true` | Show the weekly ETA, but only when you're on track to hit the weekly limit before it resets. |
 | `claudeCodeUsageTracker.predictiveAlerts.warnThresholds` | `[75, 90]` | Utilization percentages that fire a warning notification (once per window each). |
 | `claudeCodeUsageTracker.predictiveAlerts.predictBreach` | `true` | Also warn when your current pace projects you'll hit a limit before it resets. |
@@ -218,11 +228,10 @@ fallback (`refreshIntervalSeconds`). To force an update, run **Claude Code Usage
 Tracker: Refresh** from the Command Palette.
 
 **No forecast (`→ 48%`, `· on pace`, or `· ~38m`) shows next to a limit.**
-The **5-hour pace meter** appears only once **half** the window has elapsed and you're
-actively burning &mdash; before that, a projection divides by a small elapsed time and
-amplifies a single tick into an alarming number, so you'll see just `5h 15%`. It also
-disappears when you stop working, since an average rate can't tell whether you're *still*
-burning. The **weekly** ETA is shown only when you're on a trustworthy track to breach the
+The **5-hour pace meter** appears once roughly a tenth of the window has elapsed (and the
+window isn't at 0% or already 100%); in the very first minutes you'll see just `5h 4%`,
+because a projection divides by a small elapsed time and amplifies a single tick into an
+alarming number. The **weekly** ETA is shown only when you're on a trustworthy track to breach the
 weekly limit before it resets (its figure moves over days, so a constant readout would be
 noise) &mdash; the rest of the time it's just `wk 9%`, which is expected, not a missing
 reading. Turn either off with `predictiveAlerts.showFiveHourEta` /
@@ -286,12 +295,13 @@ npm run compile             # type-check + build to ./out
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release
-**fixes an output-token undercount of ~20%** (only the last line of a streamed message
-carries its settled token counts; the extension had been keeping the first), and makes
-the 5-hour pace meter stop crying wolf &mdash; it now waits until the window is half
-over, hides while you're idle, and reads `· on pace` near 100% instead of committing to
-a number that flips on the next refresh.
+See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release brings
+back the **always-on 5-hour pace meter**: the previous release had hidden it for the first
+half of every window (and while idle), which read as a missing estimator. It now shows from
+early in the window, damped toward your current utilization at first so a thin early slice
+can't project an alarming number, and firming up to the plain projection by the half-mark.
+The breach *popup* still waits for a trustworthy, actively-burning track, and near 100% the
+meter still reads `· on pace` rather than a number that flips on the next refresh.
 
 ## License
 

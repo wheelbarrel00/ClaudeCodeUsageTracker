@@ -4,6 +4,69 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.5.0] - 2026-07-14
+
+### Fixed
+- **1-hour cache writes were undercounted by 37.5%.** Anthropic bills prompt-cache writes
+  with the 1-hour TTL at **2× input**, versus 1.25× for the 5-minute TTL — and Claude Code
+  sessions use the 1-hour TTL. The extension priced *all* cache writes at the 5-minute
+  rate. It now splits the 1-hour portion out of every usage record and prices it at 2×.
+  **Your cache-write cost figures will step up after this release** — the new numbers are
+  the correct ones, not an increase in your actual usage.
+- **Sonnet 5 is priced correctly** ($2 / $10 per MTok introductory pricing, through
+  2026-08-31) — it previously fell through to the $3 / $15 default, overstating Sonnet 5
+  usage by ~50%. Model matching is also more robust: Bedrock-style prefixed ids
+  (`anthropic.` / `us.anthropic.`) now match, and an unlisted or future id is priced by
+  its family (a future Opus prices as Opus) instead of silently billing at the mid-tier
+  default.
+- **Totals no longer dip or zero out on transient file errors.** Three separate causes,
+  all fixed to keep the last good data and retry: a session file locked mid-write (common
+  on Windows) was cached as *empty* until its next change; a failed listing of the log
+  directory purged every parsed file and published zeros; and a failed stat on one file
+  silently dropped its contribution for a pass.
+- **Today's bar no longer disappears from the Daily chart for the rest of the month**
+  after a DST spring-forward in timezones where the clocks skip midnight (e.g. Havana,
+  Santiago, the Azores).
+- **Case-distinct projects on Linux no longer merge.** `/dev/API` and `/dev/api` are
+  different directories on a case-sensitive filesystem and now group separately in
+  **By project**; Windows and macOS keep folding case, matching their filesystems.
+- **The status bar's four items are now distinguishable in the right-click "Hide" menu.**
+  They used to appear as four identical unnamed entries sharing one visibility setting;
+  each now has its own name and remembers its own visibility.
+- **"Explain with AI" can no longer get stuck on "Analyzing your usage…"** — an
+  unexpected failure now surfaces as an error box in the panel.
+- **A relocated `CLAUDE_CONFIG_DIR` is honored everywhere.** The log reader, the limits
+  cache, credentials, and the shared multi-window cache all resolve from the same root;
+  previously the live-limits fetch honored the override while the log and cache readers
+  kept reading `~/.claude`, splitting the two sources.
+
+### Changed
+- **Much lighter on long, heavy histories.** The active session file is no longer re-read
+  and re-parsed in full on every assistant turn — only the newly appended lines are read
+  and folded into the parsed cache (with truncation/rewrites detected and re-parsed in
+  full). Cold startup streams files in chunks instead of loading each as one giant string,
+  and yields to the editor while parsing. A refresh that finds nothing changed reuses the
+  previous result instead of rebuilding the record set, repeated strings (model ids,
+  paths, session ids) are stored once, and the dashboard webview is released while hidden
+  and rebuilt on reveal — with the last AI explanation preserved — instead of keeping a
+  full browser context alive in memory.
+- **The limit colors are now yours.** The status-bar sunburst and the dashboard bars turn
+  yellow at your first `predictiveAlerts.warnThresholds` value and red at your last
+  (75% / 90% by default), so the colors always agree with your warning notifications. An
+  explicit warning from Anthropic can still escalate a color, never downgrade one — and
+  the status bar and dashboard can no longer disagree with each other.
+- **The 5-hour pace meter is visible again for the whole window.** 1.4.0 stopped it from
+  crying wolf, but overshot: it hid the projection for the first half of every window and
+  whenever you paused for a few minutes, so most of the time there was simply no estimate —
+  the meter looked broken. It now shows from early in the window and stays put while you're
+  idle. Early on, the projection is *damped* toward your current utilization instead of
+  hidden: a thin early slice extrapolates wildly (`5h 15%` at 30 min in would read a raw
+  `→ 150%`), so the meter is shrunk toward where you actually are and firms up to the plain
+  projection by the time the window is half over. Past the half-mark the number is exactly
+  what 1.4.0 showed. The breach **popup** is unchanged — it still fires only once the window
+  is at least half over, you're actively burning, and you're clear of the on-pace band — so
+  an always-on meter never brings back false "you'll breach" warnings.
+
 ## [1.4.0] - 2026-07-13
 
 ### Fixed

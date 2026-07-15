@@ -13,12 +13,12 @@ import {
   emptyWindowState,
   sanitizeThresholds,
   modelAdvice,
-  cheaperTier,
   FIVE_HOUR_PERIOD_MS,
   SEVEN_DAY_PERIOD_MS,
   EtaMode,
   WindowState,
 } from './burnRate';
+import { cheaperTier } from './pricing';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -311,25 +311,50 @@ test('5h projection meter shows the projected end-of-window % under and over pac
   assert.equal(over.outcomes[0].fireBreach, true);
 });
 
-test('5h projection is suppressed early in the window, where it is a 1/elapsed amplifier', () => {
+test('5h projection is damped early instead of amplifying a thin slice', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + (FIVE_HOUR_PERIOD_MS - 30 * MIN); // 30 min in (10% elapsed) -> would read "-> 150%"
-  const { outcomes } = runWindow([{ now: now0, utilization: 15, resetsAt: reset }], { etaMode: 'projection', thresholds: [] });
-  assert.equal(outcomes[0].projectedUtil, undefined);
-  assert.equal(outcomes[0].annotation, 'none');
-  assert.equal(outcomes[0].fireBreach, false);
+  const elapsed = 1 * HOUR; // 20% into a 5h window: past the 10% floor, before the 50% mark
+  const reset = now0 + (FIVE_HOUR_PERIOD_MS - elapsed);
+  const { outcomes } = runWindow([{ now: now0, utilization: 30, resetsAt: reset }], { etaMode: 'projection', thresholds: [] });
+  const raw = (30 * FIVE_HOUR_PERIOD_MS) / elapsed; // 150%: the alarming raw extrapolation
+  approx(outcomes[0].projectedUtil!, 78); // shrunk toward the current 30% (confidence 0.4) -> 78%
+  assert.ok(outcomes[0].projectedUtil! < raw && outcomes[0].projectedUtil! > 30);
+  assert.equal(outcomes[0].annotation, 'projection'); // shown, no longer blank
 });
 
-test('5h projection meter hides when idle: a stopped user is never told they will breach', () => {
+test('an over-the-band damped reading before halfway still fires no breach: the ETA gate holds', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 1 * HOUR; // 95% at 4h in -> projects to ~119%, breaches if still burning
+  const reset = now0 + 3 * HOUR; // 2h elapsed of a 5h window: 40% in, before the 50% breach gate
+  const { outcomes } = runWindow([{ now: now0, utilization: 60, resetsAt: reset }], {
+    etaMode: 'projection',
+    thresholds: [],
+    recentlyActive: true, // actively burning, so only the ETA gate stands between it and a breach
+  });
+  // Damped projection is 132% (raw 150% shrunk toward the current 60% at confidence 0.8) — well
+  // over the on-pace band — yet no breach, because etaFromAverageRate stays gated to the 50% mark.
+  approx(outcomes[0].projectedUtil!, 132);
+  assert.equal(outcomes[0].annotation, 'projection');
+  assert.equal(outcomes[0].etaMs, undefined); // the guard itself: no ETA before halfway
+  assert.equal(outcomes[0].fireBreach, false); // so a hot damped early reading cannot cry wolf
+});
+
+test('past the halfway mark the meter equals the raw projection (damping is fully confident)', () => {
+  const now0 = 1_000_000_000;
+  const reset = now0 + 2 * HOUR; // 60% elapsed of a 5h window
+  const { outcomes } = runWindow([{ now: now0, utilization: 36, resetsAt: reset }], { etaMode: 'projection', thresholds: [] });
+  approx(outcomes[0].projectedUtil!, (36 * FIVE_HOUR_PERIOD_MS) / (3 * HOUR)); // 60%, undamped
+});
+
+test('5h projection stays visible when idle but never fires a breach popup', () => {
+  const now0 = 1_000_000_000;
+  const reset = now0 + 1 * HOUR; // 95% at 4h in -> projects ~119%
   const idle = runWindow([{ now: now0, utilization: 95, resetsAt: reset }], {
     etaMode: 'projection',
     thresholds: [],
     recentlyActive: false,
   });
-  assert.equal(idle.outcomes[0].annotation, 'none');
-  assert.equal(idle.outcomes[0].fireBreach, false);
+  assert.equal(idle.outcomes[0].annotation, 'projection'); // still shown (self-corrects downward as you idle)
+  assert.equal(idle.outcomes[0].fireBreach, false); // but a stopped user is never told they'll breach
 
   const active = runWindow([{ now: now0, utilization: 95, resetsAt: reset }], {
     etaMode: 'projection',
@@ -337,7 +362,7 @@ test('5h projection meter hides when idle: a stopped user is never told they wil
     recentlyActive: true,
   });
   assert.equal(active.outcomes[0].annotation, 'projection');
-  assert.equal(active.outcomes[0].fireBreach, true);
+  assert.equal(active.outcomes[0].fireBreach, true); // active + over pace + past halfway -> breach
 });
 
 test('a knife-edge lead over pace reads "on pace" and raises no alarm', () => {

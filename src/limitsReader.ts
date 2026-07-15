@@ -1,6 +1,6 @@
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { claudeConfigDir } from './paths';
 
 export type Severity = string;
 
@@ -33,8 +33,31 @@ export interface PlanLimits {
 
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
+export type SeverityBand = 'normal' | 'warning' | 'error';
+
+// One severity->color rule for both the status bar and dashboard. Bands come from the user's warn
+// thresholds (warning = first, error = last); the API severity only escalates, unknown strings ignored.
+export function severityBand(window: LimitWindow, thresholds: number[]): SeverityBand {
+  if (window.severity === 'critical' || window.severity === 'error') {
+    return 'error';
+  }
+  const shown = Math.round(window.utilization);
+  let band: SeverityBand = 'normal';
+  if (thresholds.length > 0) {
+    if (shown >= thresholds[thresholds.length - 1]) {
+      band = 'error';
+    } else if (shown >= thresholds[0]) {
+      band = 'warning';
+    }
+  }
+  if (band === 'normal' && window.severity === 'warning') {
+    return 'warning';
+  }
+  return band;
+}
+
 export function usageCachePath(): string {
-  return path.join(os.homedir(), '.claude', 'usage-cache.json');
+  return path.join(claudeConfigDir(), 'usage-cache.json');
 }
 
 export async function loadPlanLimits(): Promise<PlanLimits | undefined> {

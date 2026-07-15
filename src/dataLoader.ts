@@ -1,8 +1,8 @@
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { UsageRecord, UsageSummary, EMPTY_TOKENS } from './types';
-import { estimateCost, pricingForModel } from './pricing';
+import { estimateCost, pricingForModel, cacheWriteRaw } from './pricing';
+import { claudeConfigDir } from './paths';
 
 const SYNTHETIC_MODEL = '<synthetic>';
 
@@ -27,32 +27,59 @@ export interface ParsedEntry {
 
 interface CachedFile {
   mtimeMs: number;
+  size: number;
+  // Byte offset through the last committed line; on growth only [parsedBytes, size) is re-read.
+  parsedBytes: number;
   entries: ParsedEntry[];
+  index: Map<string, number>;
+  aiTitle?: string;
+  lastPrompt?: string;
 }
 
 const fileCache = new Map<string, CachedFile>();
+let lastRecords: UsageRecord[] | undefined;
 
-export function claudeLogRoot(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
+// One shared instance per distinct string; model ids / cwds / sessions repeat across every record.
+const internPool = new Map<string, string>();
+
+function intern(value: string): string {
+  const existing = internPool.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  internPool.set(value, value);
+  return value;
 }
 
-async function findJsonlFiles(dir: string): Promise<string[]> {
+export function claudeLogRoot(): string {
+  return path.join(claudeConfigDir(), 'projects');
+}
+
+// undefined = a directory in the walk failed to read (an access blip), not "no files": the caller
+// keeps last-good data instead of purging every file and publishing a dipped total.
+export async function findJsonlFiles(root: string): Promise<string[] | undefined> {
+  const files: string[] = [];
+  return (await collectJsonl(root, files)) ? files : undefined;
+}
+
+async function collectJsonl(dir: string, files: string[]): Promise<boolean> {
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return false;
   }
-  const files: string[] = [];
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await findJsonlFiles(full)));
+      if (!(await collectJsonl(full, files))) {
+        return false;
+      }
     } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
       files.push(full);
     }
   }
-  return files;
+  return true;
 }
 
 function toCount(value: unknown): number {
@@ -82,8 +109,7 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
 
   const messageId = typeof message.id === 'string' ? message.id : '';
   const requestId = typeof entry.requestId === 'string' ? entry.requestId : '';
-  // A message is logged once per streamed content block; the interim lines carry a
-  // placeholder output_tokens, so duplicates must resolve to the last, settled occurrence.
+  // Interim streamed lines carry a placeholder output_tokens; dedupe to the last settled occurrence.
   let key = '';
   if (messageId || requestId) {
     key = `${messageId}|${requestId}`;
@@ -91,19 +117,20 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
     key = `uuid:${entry.uuid}`;
   }
 
-  const cwd = typeof entry.cwd === 'string' && entry.cwd ? entry.cwd : undefined;
-  const session = typeof entry.sessionId === 'string' && entry.sessionId ? entry.sessionId : undefined;
-  const branch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined;
+  const cwd = typeof entry.cwd === 'string' && entry.cwd ? intern(entry.cwd) : undefined;
+  const session = typeof entry.sessionId === 'string' && entry.sessionId ? intern(entry.sessionId) : undefined;
+  const branch = typeof entry.gitBranch === 'string' && entry.gitBranch ? intern(entry.gitBranch) : undefined;
   const record: UsageRecord = {
     timestamp,
-    model,
+    model: intern(model),
     tokens: {
       input: toCount(usage.input_tokens),
       output: toCount(usage.output_tokens),
       cacheWrite: toCount(usage.cache_creation_input_tokens),
+      cacheWrite1h: toCount(usage.cache_creation?.ephemeral_1h_input_tokens),
       cacheRead: toCount(usage.cache_read_input_tokens),
     },
-    project: cwd ? path.basename(cwd) : undefined,
+    project: cwd ? intern(path.basename(cwd)) : undefined,
     cwd,
     session,
     branch,
@@ -111,65 +138,82 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
   return { key, record };
 }
 
-async function parseFile(file: string): Promise<ParsedEntry[]> {
-  let text: string;
-  try {
-    text = await fs.promises.readFile(file, 'utf8');
-  } catch {
-    return [];
+interface ParseState {
+  entries: ParsedEntry[];
+  index: Map<string, number>;
+  aiTitle?: string;
+  lastPrompt?: string;
+}
+
+function newParseState(): ParseState {
+  return { entries: [], index: new Map() };
+}
+
+// false only for a non-empty line that isn't valid JSON (a truncated mid-write tail — don't consume).
+function parseLine(state: ParseState, line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return true;
   }
-  return parseEntries(text);
+  let raw: any;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (raw.type === 'ai-title') {
+    if (typeof raw.aiTitle === 'string' && raw.aiTitle) {
+      state.aiTitle = raw.aiTitle;
+    }
+    return true;
+  }
+  if (raw.type === 'last-prompt') {
+    if (typeof raw.lastPrompt === 'string' && raw.lastPrompt) {
+      state.lastPrompt = raw.lastPrompt;
+    }
+    return true;
+  }
+  const parsed = parseUsageEntry(raw);
+  if (!parsed) {
+    return true;
+  }
+  if (parsed.key) {
+    const at = state.index.get(parsed.key);
+    if (at !== undefined) {
+      state.entries[at] = parsed;
+      return true;
+    }
+    state.index.set(parsed.key, state.entries.length);
+  }
+  state.entries.push(parsed);
+  return true;
+}
+
+function titleOf(state: { aiTitle?: string; lastPrompt?: string }): string | undefined {
+  return state.aiTitle ?? (state.lastPrompt ? truncate(state.lastPrompt, 70) : undefined);
+}
+
+function applyTitleTo(entries: ParsedEntry[], title: string | undefined): void {
+  if (!title) {
+    return;
+  }
+  const shared = intern(title);
+  for (const entry of entries) {
+    entry.record.sessionTitle = shared;
+  }
+}
+
+function applyTitle(state: ParseState): void {
+  applyTitleTo(state.entries, titleOf(state));
 }
 
 export function parseEntries(text: string): ParsedEntry[] {
-  const entries: ParsedEntry[] = [];
-  const index = new Map<string, number>();
-  let aiTitle: string | undefined;
-  let lastPrompt: string | undefined;
+  const state = newParseState();
   for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let raw: any;
-    try {
-      raw = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (raw.type === 'ai-title') {
-      if (typeof raw.aiTitle === 'string' && raw.aiTitle) {
-        aiTitle = raw.aiTitle;
-      }
-      continue;
-    }
-    if (raw.type === 'last-prompt') {
-      if (typeof raw.lastPrompt === 'string' && raw.lastPrompt) {
-        lastPrompt = raw.lastPrompt;
-      }
-      continue;
-    }
-    const parsed = parseUsageEntry(raw);
-    if (!parsed) {
-      continue;
-    }
-    if (parsed.key) {
-      const at = index.get(parsed.key);
-      if (at !== undefined) {
-        entries[at] = parsed;
-        continue;
-      }
-      index.set(parsed.key, entries.length);
-    }
-    entries.push(parsed);
+    parseLine(state, line);
   }
-  const title = aiTitle ?? (lastPrompt ? truncate(lastPrompt, 70) : undefined);
-  if (title) {
-    for (const entry of entries) {
-      entry.record.sessionTitle = title;
-    }
-  }
-  return entries;
+  applyTitle(state);
+  return state.entries;
 }
 
 function truncate(value: string, max: number): string {
@@ -177,29 +221,181 @@ function truncate(value: string, max: number): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
+const READ_CHUNK_BYTES = 1 << 20;
+const PARSE_YIELD_LINES = 10_000;
+
+// Parse [start, end) into a FRESH state, returning the byte offset consumed. Whole lines commit;
+// a trailing no-newline segment commits only if it parses (else it's a partial mid-write tail).
+// Chunked with a periodic yield so a cold multi-hundred-MB file can't stall the host.
+async function parseRange(handle: fs.promises.FileHandle, start: number, end: number, state: ParseState): Promise<number> {
+  let offset = start;
+  let consumed = start;
+  let carry: Buffer = Buffer.alloc(0);
+  let linesSinceYield = 0;
+  while (offset < end) {
+    const length = Math.min(READ_CHUNK_BYTES, end - offset);
+    const { bytesRead, buffer } = await handle.read({
+      buffer: Buffer.allocUnsafe(length),
+      position: offset,
+      length,
+    });
+    if (bytesRead <= 0) {
+      break; // file shrank mid-read; the next pass's size check re-parses
+    }
+    offset += bytesRead;
+    const chunk = buffer.subarray(0, bytesRead);
+    const combined = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+    // 0x0A never appears inside a multi-byte UTF-8 char, so splitting on the byte is safe.
+    const lastNewline = combined.lastIndexOf(0x0a);
+    if (lastNewline === -1) {
+      carry = combined;
+      continue;
+    }
+    const complete = combined.subarray(0, lastNewline);
+    carry = combined.subarray(lastNewline + 1);
+    consumed = offset - carry.length;
+    for (const line of complete.toString('utf8').split('\n')) {
+      parseLine(state, line);
+      if (++linesSinceYield >= PARSE_YIELD_LINES) {
+        linesSinceYield = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  }
+  if (carry.length && parseLine(state, carry.toString('utf8'))) {
+    consumed = offset;
+  }
+  return consumed;
+}
+
+// True when `offset` still sits on a line boundary — distinguishes a real append from a
+// truncate-then-regrow rewrite (which grew past the old size but would resume mid-line).
+async function endsOnBoundary(handle: fs.promises.FileHandle, offset: number): Promise<boolean> {
+  if (offset <= 0) {
+    return false;
+  }
+  const buf = Buffer.allocUnsafe(1);
+  const { bytesRead } = await handle.read({ buffer: buf, position: offset - 1, length: 1 });
+  return bytesRead === 1 && buf[0] === 0x0a;
+}
+
+// Fold a cleanly-parsed tail into the cached entries/index in place; keyed dups replace via the index.
+function mergeTail(base: CachedFile, tail: ParseState): void {
+  for (const entry of tail.entries) {
+    if (entry.key) {
+      const at = base.index.get(entry.key);
+      if (at !== undefined) {
+        base.entries[at] = entry;
+        continue;
+      }
+      base.index.set(entry.key, base.entries.length);
+    }
+    base.entries.push(entry);
+  }
+  if (tail.aiTitle) {
+    base.aiTitle = tail.aiTitle;
+  }
+  if (tail.lastPrompt) {
+    base.lastPrompt = tail.lastPrompt;
+  }
+}
+
+// Tail-parse appended bytes and fold them in (JSONL is append-only); anything else — cold,
+// truncated, or rewritten — is a full re-parse. Parsing goes into a throwaway state committed
+// only on success, so a read blip (a Windows lock/permission mid-write) leaves the cache untouched.
+async function refreshFile(file: string, st: fs.Stats, cached: CachedFile | undefined): Promise<CachedFile | undefined> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+  } catch {
+    return cached;
+  }
+  try {
+    const canTail = cached !== undefined && st.size > cached.size && (await endsOnBoundary(handle, cached.parsedBytes));
+    const tail = newParseState();
+    let parsedBytes: number;
+    try {
+      parsedBytes = await parseRange(handle, canTail ? cached!.parsedBytes : 0, st.size, tail);
+    } catch {
+      return cached;
+    }
+    if (canTail && cached) {
+      mergeTail(cached, tail);
+      cached.mtimeMs = st.mtimeMs;
+      cached.size = st.size;
+      cached.parsedBytes = parsedBytes;
+      applyTitleTo(cached.entries, titleOf(cached));
+      return cached;
+    }
+    applyTitle(tail);
+    return {
+      mtimeMs: st.mtimeMs,
+      size: st.size,
+      parsedBytes,
+      entries: tail.entries,
+      index: tail.index,
+      aiTitle: tail.aiTitle,
+      lastPrompt: tail.lastPrompt,
+    };
+  } finally {
+    try {
+      await handle.close();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export async function loadUsageRecords(): Promise<UsageRecord[]> {
   const files = await findJsonlFiles(claudeLogRoot());
+  if (files === undefined) {
+    // Root walk failed: serve the last good snapshot rather than publishing zeros.
+    return lastRecords ?? [];
+  }
   const present = new Set(files);
-  for (const cached of fileCache.keys()) {
-    if (!present.has(cached)) {
-      fileCache.delete(cached);
+  let changed = lastRecords === undefined;
+  for (const known of fileCache.keys()) {
+    if (!present.has(known)) {
+      fileCache.delete(known);
+      changed = true;
     }
   }
 
-  const seen = new Set<string>();
-  const records: UsageRecord[] = [];
-  for (const file of files) {
-    let mtimeMs: number;
-    try {
-      mtimeMs = (await fs.promises.stat(file)).mtimeMs;
-    } catch {
+  const stats = await Promise.all(files.map((file) => fs.promises.stat(file).catch(() => undefined)));
+
+  const results: CachedFile[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const st = stats[i];
+    const cached = fileCache.get(file);
+    if (!st) {
+      // A stat blip on an already-parsed file must not dip totals; reuse its cached entries.
+      if (cached) {
+        results.push(cached);
+      }
       continue;
     }
-    let cached = fileCache.get(file);
-    if (!cached || cached.mtimeMs !== mtimeMs) {
-      cached = { mtimeMs, entries: await parseFile(file) };
-      fileCache.set(file, cached);
+    if (cached && st.mtimeMs === cached.mtimeMs && st.size === cached.size) {
+      results.push(cached);
+      continue;
     }
+    changed = true;
+    const fresh = await refreshFile(file, st, cached);
+    if (fresh) {
+      fileCache.set(file, fresh);
+      results.push(fresh);
+    } else if (cached) {
+      results.push(cached);
+    }
+  }
+
+  // Nothing changed: skip the O(all-records) flatten and reuse the last snapshot.
+  if (!changed && lastRecords) {
+    return lastRecords;
+  }
+  const seen = new Set<string>();
+  const records: UsageRecord[] = [];
+  for (const cached of results) {
     for (const { key, record } of cached.entries) {
       if (key) {
         if (seen.has(key)) {
@@ -210,6 +406,7 @@ export async function loadUsageRecords(): Promise<UsageRecord[]> {
       records.push(record);
     }
   }
+  lastRecords = records;
   return records;
 }
 
@@ -220,6 +417,7 @@ export function summarize(records: UsageRecord[]): UsageSummary {
     tokens.input += record.tokens.input;
     tokens.output += record.tokens.output;
     tokens.cacheWrite += record.tokens.cacheWrite;
+    tokens.cacheWrite1h += record.tokens.cacheWrite1h;
     tokens.cacheRead += record.tokens.cacheRead;
     costUsd += estimateCost(record.tokens, record.model);
   }
@@ -239,7 +437,7 @@ export function costBreakdown(records: UsageRecord[]): CostParts {
     const p = pricingForModel(record.model);
     parts.input += (record.tokens.input * p.input) / 1_000_000;
     parts.output += (record.tokens.output * p.output) / 1_000_000;
-    parts.cacheWrite += (record.tokens.cacheWrite * p.cacheWrite) / 1_000_000;
+    parts.cacheWrite += cacheWriteRaw(record.tokens, p) / 1_000_000;
     parts.cacheRead += (record.tokens.cacheRead * p.cacheRead) / 1_000_000;
   }
   return parts;
@@ -290,21 +488,22 @@ function bucketBy(records: UsageRecord[], keyOf: (date: Date) => string): Map<st
   return buckets;
 }
 
-// Daily buckets for the current month, 1st through today, with empty days filled.
+// Daily buckets, 1st through today, empty days filled. Each day is built from its index (not a
+// cursor): a non-existent spring-forward midnight would otherwise stick at 01:00 and drop today.
 export function summarizeDaily(records: UsageRecord[], now = new Date()): TrendBucket[] {
   const buckets = bucketBy(records, dayKeyOf);
-  const cursor = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const year = now.getFullYear();
+  const month = now.getMonth();
   const result: TrendBucket[] = [];
-  while (cursor <= end) {
-    const key = dayKeyOf(cursor);
-    result.push({ key, startMs: cursor.getTime(), summary: summarize(buckets.get(key) ?? []) });
-    cursor.setDate(cursor.getDate() + 1);
+  for (let d = 1; d <= now.getDate(); d++) {
+    const day = new Date(year, month, d);
+    const key = dayKeyOf(day);
+    result.push({ key, startMs: day.getTime(), summary: summarize(buckets.get(key) ?? []) });
   }
   return result;
 }
 
-// Monthly buckets from the earliest record's month through this month, gaps filled.
+// Monthly buckets, earliest record's month through now, gaps filled; built by index (see summarizeDaily).
 export function summarizeMonthly(records: UsageRecord[], now = new Date()): TrendBucket[] {
   if (records.length === 0) {
     return [];
@@ -315,19 +514,19 @@ export function summarizeMonthly(records: UsageRecord[], now = new Date()): Tren
     earliest = Math.min(earliest, record.timestamp);
   }
   const first = new Date(earliest);
-  const cursor = new Date(first.getFullYear(), first.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startYear = first.getFullYear();
+  const startMonth = first.getMonth();
+  const months = (now.getFullYear() - startYear) * 12 + (now.getMonth() - startMonth);
   const result: TrendBucket[] = [];
-  while (cursor <= end) {
-    const key = monthKeyOf(cursor);
-    result.push({ key, startMs: cursor.getTime(), summary: summarize(buckets.get(key) ?? []) });
-    cursor.setMonth(cursor.getMonth() + 1);
+  for (let i = 0; i <= months; i++) {
+    const monthDate = new Date(startYear, startMonth + i, 1);
+    const key = monthKeyOf(monthDate);
+    result.push({ key, startMs: monthDate.getTime(), summary: summarize(buckets.get(key) ?? []) });
   }
   return result;
 }
 
-// Logs sometimes drop the [1m] marker, so a prompt larger than the base
-// window is itself proof of the 1M tier.
+// Logs sometimes drop the [1m] marker; a prompt over the base window is itself proof of the 1M tier.
 function contextWindowFor(model: string, tokens: number): number {
   return model.includes('[1m]') || tokens > 200_000 ? 1_000_000 : 200_000;
 }
@@ -392,15 +591,23 @@ function gitRootFor(cwd: string): string | null {
   }
 }
 
+// Fold case for grouping keys only where the filesystem does (Windows/macOS); on Linux
+// /dev/API and /dev/api are distinct projects. Display labels keep their original case.
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
+
+function foldCase(value: string): string {
+  return CASE_INSENSITIVE_FS ? value.toLowerCase() : value;
+}
+
 function normalizeKey(p: string): string {
-  return p.toLowerCase().replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  return foldCase(p).replace(/[\\/]+/g, '/').replace(/\/+$/, '');
 }
 
 function projectGroup(record: UsageRecord, mode: string): { key: string; label: string; path?: string } {
   const cwd = record.cwd;
   if (!cwd) {
     const name = record.project ?? 'unknown';
-    return { key: name.toLowerCase(), label: name };
+    return { key: foldCase(name), label: name };
   }
   if (mode === 'flat') {
     return { key: normalizeKey(cwd), label: path.basename(cwd), path: cwd };
@@ -410,7 +617,7 @@ function projectGroup(record: UsageRecord, mode: string): { key: string; label: 
     return { key: normalizeKey(root), label: path.basename(root), path: root };
   }
   const base = path.basename(cwd);
-  return { key: base.toLowerCase(), label: base };
+  return { key: foldCase(base), label: base };
 }
 
 export function summarizeByProject(records: UsageRecord[], mode = 'git'): GroupSummary[] {
@@ -455,7 +662,7 @@ export function summarizeByBranch(records: UsageRecord[]): BranchSummary[] {
       continue;
     }
     const project = record.project ?? 'unknown';
-    const key = `${project.toLowerCase()} ${record.branch}`;
+    const key = `${foldCase(project)}\u0000${record.branch}`;
     const existing = groups.get(key);
     if (existing) {
       existing.records.push(record);

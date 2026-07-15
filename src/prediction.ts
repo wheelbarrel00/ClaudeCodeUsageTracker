@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { UsageRecord } from './types';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
+import { familyLabel } from './pricing';
+import { formatCurrency } from './format';
 import {
   burnRate,
   evaluateWindow,
@@ -162,9 +164,9 @@ function notifyBreach(label: string, etaMs: number, window: LimitWindow): void {
 
 function notifyAdvice(advice: ModelAdvice, currency: string, decimals: number): void {
   const minutes = Math.round(advice.windowMs / 60000);
-  const spend = formatMoney(advice.modelCostUsd, currency, decimals);
+  const spend = formatCurrency(advice.modelCostUsd, currency, decimals);
   const message =
-    `Mostly short ${modelFamily(advice.model)} turns lately (${spend} over ~${minutes}m). ` +
+    `Mostly short ${familyLabel(advice.model)} turns lately (${spend} over ~${minutes}m). ` +
     `A cheaper model like ${advice.cheaperLabel} could handle routine work for less.`;
   void vscode.window.showInformationMessage(message, DONT_SHOW_AGAIN).then((choice) => {
     if (choice === DONT_SHOW_AGAIN) {
@@ -173,36 +175,6 @@ function notifyAdvice(advice: ModelAdvice, currency: string, decimals: number): 
         .update('predictiveAlerts.modelAdvisor.enabled', false, vscode.ConfigurationTarget.Global);
     }
   });
-}
-
-function modelFamily(model: string): string {
-  const m = model.toLowerCase();
-  if (m.includes('opus')) {
-    return 'Opus';
-  }
-  if (m.includes('sonnet')) {
-    return 'Sonnet';
-  }
-  if (m.includes('fable')) {
-    return 'Fable';
-  }
-  if (m.includes('haiku')) {
-    return 'Haiku';
-  }
-  return model;
-}
-
-function formatMoney(value: number, currency: string, decimals: number): string {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    }).format(value);
-  } catch {
-    return `$${value.toFixed(decimals)}`;
-  }
 }
 
 function readConfig(): PredictionConfig {

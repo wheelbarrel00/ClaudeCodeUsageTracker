@@ -8,7 +8,7 @@ import * as https from 'https';
 import { UsageRecord } from './types';
 import { PlanLimits } from './limitsReader';
 import { filterMonth } from './dataLoader';
-import { isSubscription } from './credentials';
+import { hasSubscription } from './credentials';
 import { buildDigest, systemPrompt, collectPromptSamples } from './aiDigest';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -154,7 +154,7 @@ export class AiAdvisor {
       }
     }
 
-    const subscription = isSubscription() || !!(limits?.fiveHour || limits?.sevenDay);
+    const subscription = hasSubscription(limits);
     const monthRecords = filterMonth(records);
     const samples = includePrompts ? await collectPromptSamples() : [];
     const digest = buildDigest(monthRecords, limits, now, samples, subscription);

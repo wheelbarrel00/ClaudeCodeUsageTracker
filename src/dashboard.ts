@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { UsageRecord, UsageSummary, TokenCounts } from './types';
+import { UsageRecord, UsageSummary, TokenCounts, totalTokens } from './types';
 import {
   summarize,
   filterToday,
@@ -18,10 +18,12 @@ import {
   SessionSummary,
   TrendBucket,
 } from './dataLoader';
-import { PlanLimits, LimitWindow, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
+import { PlanLimits, LimitWindow, ExtraUsage, severityBand, formatReset, formatAge, formatExtraSpend } from './limitsReader';
 import { analyze, Insight, savingsBadge } from './advisor';
 import { AiAdvisor, AiResult } from './aiAdvisor';
-import { isSubscription } from './credentials';
+import { hasSubscription } from './credentials';
+import { sanitizeThresholds } from './burnRate';
+import { formatCurrency } from './format';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -41,6 +43,7 @@ export class Dashboard {
   private limits: PlanLimits | undefined;
   private ready = false;
   private aiInFlight = false;
+  private lastAiHtml: string | undefined;
 
   constructor(private readonly ai?: AiAdvisor) {}
 
@@ -59,11 +62,19 @@ export class Dashboard {
       'claudeCodeUsageTracker.dashboard',
       'Claude Code Usage',
       vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: true }
+      { enableScripts: true, localResourceRoots: [] }
     );
     this.panel.onDidDispose(() => {
       this.panel = undefined;
       this.ready = false;
+      this.lastAiHtml = undefined;
+    });
+    // Without retainContextWhenHidden the webview reloads on reveal (re-posting 'ready'); drop
+    // readiness on hide so a stale post can't race the reload.
+    this.panel.onDidChangeViewState(() => {
+      if (this.panel && !this.panel.visible) {
+        this.ready = false;
+      }
     });
     this.panel.webview.onDidReceiveMessage((message) => {
       if (!message) {
@@ -72,6 +83,10 @@ export class Dashboard {
       if (message.type === 'ready') {
         this.ready = true;
         this.post();
+        // The AI explanation isn't in the payload; re-send it so it survives a hide/reveal reload.
+        if (this.lastAiHtml) {
+          this.panel?.webview.postMessage({ type: 'aiResult', html: this.lastAiHtml });
+        }
       } else if (message.type === 'explainWithAI') {
         void this.runAi();
       }
@@ -82,7 +97,8 @@ export class Dashboard {
   update(records: UsageRecord[], limits?: PlanLimits): void {
     this.records = records;
     this.limits = limits;
-    if (this.panel && this.ready) {
+    // A hidden panel is torn down; the reload's 'ready' handshake re-sends the latest data on reveal.
+    if (this.panel?.visible && this.ready) {
       this.post();
     }
   }
@@ -97,14 +113,25 @@ export class Dashboard {
     if (!this.ai || this.aiInFlight) {
       return;
     }
+    // Drop the result if the panel was closed/replaced mid-request — else the next dashboard
+    // would replay a stale, unrequested AI box on its 'ready' handshake.
+    const panel = this.panel;
     this.aiInFlight = true;
+    let result: AiResult;
     try {
-      const result = await this.ai.explain(this.records, this.limits);
-      if (this.panel && this.ready) {
-        this.panel.webview.postMessage({ type: 'aiResult', html: renderAiHtml(result) });
-      }
+      result = await this.ai.explain(this.records, this.limits);
+    } catch (err) {
+      // Without this the webview's "Analyzing your usage…" spinner would hang forever.
+      result = { ok: false, error: `AI explanation failed: ${err instanceof Error ? err.message : String(err)}` };
     } finally {
       this.aiInFlight = false;
+    }
+    if (this.panel !== panel) {
+      return;
+    }
+    this.lastAiHtml = renderAiHtml(result);
+    if (this.panel?.visible && this.ready) {
+      this.panel.webview.postMessage({ type: 'aiResult', html: this.lastAiHtml });
     }
   }
 
@@ -128,7 +155,8 @@ function buildPayload(
   const currency = cfg.get<string>('currency', 'USD');
   const groupingMode = cfg.get<string>('projectGroupingMode', 'git');
   const money = (value: number): string => formatCurrency(value, currency, decimals);
-  const subscription = isSubscription() || !!(limits?.fiveHour || limits?.sevenDay);
+  const subscription = hasSubscription(limits);
+  const thresholds = sanitizeThresholds(cfg.get<number[]>('predictiveAlerts.warnThresholds', [75, 90]));
 
   const monthRecords = filterMonth(records);
   const windows: Record<string, WindowData> = {
@@ -147,7 +175,7 @@ function buildPayload(
       sessionsTable(windows[key].sessions, money);
   }
   const showExtraUsage = cfg.get<boolean>('showExtraUsage', false);
-  const limitsHtml = limitsSection(limits) + extraUsageSection(showExtraUsage ? limits?.extraUsage : undefined);
+  const limitsHtml = limitsSection(limits, thresholds) + extraUsageSection(showExtraUsage ? limits?.extraUsage : undefined);
   const advisorHtml = cfg.get<boolean>('advisor.enabled', true)
     ? advisorSection(
         analyze({ records: monthRecords, sessions: windows.month.sessions, now: Date.now(), subscription }, money),
@@ -268,19 +296,19 @@ function extraUsageSection(extra: ExtraUsage | undefined): string {
   </section>`;
 }
 
-function limitsSection(limits: PlanLimits | undefined): string {
+function limitsSection(limits: PlanLimits | undefined, thresholds: number[]): string {
   if (!limits) {
     return '';
   }
   const rows: string[] = [];
   if (limits.fiveHour) {
-    rows.push(barRow('5-hour session', limits.fiveHour));
+    rows.push(barRow('5-hour session', limits.fiveHour, thresholds));
   }
   if (limits.sevenDay) {
-    rows.push(barRow('Weekly · all models', limits.sevenDay));
+    rows.push(barRow('Weekly · all models', limits.sevenDay, thresholds));
   }
   for (const scoped of limits.scoped) {
-    rows.push(barRow(`Weekly · ${scoped.label}`, scoped));
+    rows.push(barRow(`Weekly · ${scoped.label}`, scoped, thresholds));
   }
   if (rows.length === 0) {
     return '';
@@ -295,27 +323,15 @@ ${rows.join('\n')}
   </section>`;
 }
 
-function barRow(label: string, window: LimitWindow): string {
+function barRow(label: string, window: LimitWindow, thresholds: number[]): string {
   const pct = Math.round(window.utilization);
   const width = Math.min(100, Math.max(0, pct));
   const reset = formatReset(window.resetsAt);
   const sub = reset ? `\n        <div class="bar-sub">${esc(reset)}</div>` : '';
   return `      <div class="bar-row">
         <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
-        <div class="bar-track"><div class="bar-fill ${severityClass(window.severity)}" style="width:${width}%"></div></div>${sub}
+        <div class="bar-track"><div class="bar-fill ${severityBand(window, thresholds)}" style="width:${width}%"></div></div>${sub}
       </div>`;
-}
-
-function severityClass(severity: string): string {
-  switch (severity) {
-    case 'critical':
-    case 'error':
-      return 'error';
-    case 'normal':
-      return 'normal';
-    default:
-      return 'warning';
-  }
 }
 
 function windowData(title: string, records: UsageRecord[], groupingMode: string): WindowData {
@@ -332,7 +348,7 @@ function windowData(title: string, records: UsageRecord[], groupingMode: string)
 
 function card(win: WindowData, money: (value: number) => string, subscription: boolean): string {
   const t = win.summary.tokens;
-  const total = t.input + t.output + t.cacheWrite + t.cacheRead;
+  const total = totalTokens(t);
   const row = (label: string, value: number): string =>
     `<tr><td>${label}</td><td class="num">${value.toLocaleString('en-US')}</td></tr>`;
   const messages = `${win.summary.messageCount.toLocaleString('en-US')} messages · ${Math.round(cacheHitRate(t))}% cache hit`;
@@ -389,7 +405,7 @@ function sumTotals(summaries: UsageSummary[]): { messages: number; tokens: numbe
   let cost = 0;
   for (const s of summaries) {
     messages += s.messageCount;
-    tokens += s.tokens.input + s.tokens.output + s.tokens.cacheWrite + s.tokens.cacheRead;
+    tokens += totalTokens(s.tokens);
     cost += s.costUsd;
   }
   return { messages, tokens, cost };
@@ -407,7 +423,7 @@ function breakdownTable(
   const rows = groups
     .map((group) => {
       const t = group.summary.tokens;
-      const total = t.input + t.output + t.cacheWrite + t.cacheRead;
+      const total = totalTokens(t);
       return `      <tr data-name="${esc(group.key)}" data-messages="${group.summary.messageCount}" data-tokens="${total}" data-cost="${group.summary.costUsd}"><td>${esc(group.key)}</td><td class="num">${group.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${total.toLocaleString('en-US')}</td><td class="num">${money(group.summary.costUsd)}</td></tr>`;
     })
     .join('\n');
@@ -429,7 +445,7 @@ function branchesTable(branches: BranchSummary[], money: (value: number) => stri
   const rows = branches
     .map((b) => {
       const t = b.summary.tokens;
-      const tokens = t.input + t.output + t.cacheWrite + t.cacheRead;
+      const tokens = totalTokens(t);
       return `      <tr data-name="${esc(b.branch)}" data-project="${esc(b.project)}" data-messages="${b.summary.messageCount}" data-tokens="${tokens}" data-cost="${b.summary.costUsd}"><td>${esc(b.branch)}</td><td>${esc(b.project)}</td><td class="num">${b.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${tokens.toLocaleString('en-US')}</td><td class="num">${money(b.summary.costUsd)}</td></tr>`;
     })
     .join('\n');
@@ -455,7 +471,7 @@ function sessionsTable(sessions: SessionSummary[], money: (value: number) => str
   const rows = shown
     .map((s) => {
       const t = s.summary.tokens;
-      const tokens = t.input + t.output + t.cacheWrite + t.cacheRead;
+      const tokens = totalTokens(t);
       const durationMs = s.activeMs;
       const started = new Date(s.startMs).toLocaleString();
       return `      <tr data-name="${esc(s.title)}" data-project="${esc(s.project)}" data-messages="${s.summary.messageCount}" data-tokens="${tokens}" data-peak="${s.peakContextPct}" data-cost="${s.summary.costUsd}" data-duration="${durationMs}"><td title="Started ${esc(started)}">${esc(s.title)}</td><td>${esc(s.project)}</td><td class="num">${s.summary.messageCount.toLocaleString('en-US')}</td><td class="num">${tokens.toLocaleString('en-US')}</td><td class="num">${Math.round(s.peakContextPct)}%</td><td class="num">${money(s.summary.costUsd)}</td><td class="num">${formatDuration(durationMs)}</td></tr>`;
@@ -489,11 +505,7 @@ function chartSet(records: UsageRecord[], money: (value: number) => string): Cha
 }
 
 function bucketValue(bucket: TrendBucket, metric: Metric): number {
-  if (metric === 'cost') {
-    return bucket.summary.costUsd;
-  }
-  const t = bucket.summary.tokens;
-  return t.input + t.output + t.cacheWrite + t.cacheRead;
+  return metric === 'cost' ? bucket.summary.costUsd : totalTokens(bucket.summary.tokens);
 }
 
 function chartHtml(
@@ -836,19 +848,6 @@ function makeNonce(): string {
     nonce += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return nonce;
-}
-
-function formatCurrency(value: number, currency: string, decimals: number): string {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    }).format(value);
-  } catch {
-    return `$${value.toFixed(decimals)}`;
-  }
 }
 
 function esc(value: string): string {

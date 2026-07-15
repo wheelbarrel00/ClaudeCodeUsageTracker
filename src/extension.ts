@@ -172,12 +172,25 @@ function watchGlob(context: vscode.ExtensionContext, base: string, glob: string)
   );
 }
 
+// Trailing debounce with a max-wait: a steady stream of session-log writes would otherwise keep
+// pushing the timer out and starve live updates down to the interval timer.
+const WATCH_DEBOUNCE_MS = 750;
+const WATCH_MAX_WAIT_MS = 5000;
+let watchFirstEventAt = 0;
+
 function scheduleWatchRefresh(): void {
-  clearWatchDebounce();
+  if (watchDebounce) {
+    if (Date.now() - watchFirstEventAt >= WATCH_MAX_WAIT_MS) {
+      return; // let the pending timer fire despite continuing events
+    }
+    clearTimeout(watchDebounce);
+  } else {
+    watchFirstEventAt = Date.now();
+  }
   watchDebounce = setTimeout(() => {
     watchDebounce = undefined;
     void refresh();
-  }, 750);
+  }, WATCH_DEBOUNCE_MS);
 }
 
 function clearWatchDebounce(): void {

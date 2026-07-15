@@ -12,9 +12,12 @@ tsconfig.json
 .claude/**
 *.vsix
 CLAUDE.md
+HANDOFF.md
+AUDIT-STATUS.md
 images/**
 !images/stats.png
 !images/logo.jpg
 !images/statusbar.png
+!images/status-tooltip.png
 !images/predictive-warning.png
 !images/ai-advisor.png

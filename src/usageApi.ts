@@ -1,9 +1,9 @@
 import * as https from 'https';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { mapUsageData, PlanLimits } from './limitsReader';
 import { readOAuth, isExpiring, OAuthCredentials } from './credentials';
+import { claudeConfigDir } from './paths';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
@@ -31,8 +31,7 @@ const SHARED_SKEW_MS = 60 * 1000;
 let sharedWriteSeq = 0;
 
 function sharedCachePath(): string {
-  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  return path.join(base, '.ccut', 'usage-shared.json');
+  return path.join(claudeConfigDir(), '.ccut', 'usage-shared.json');
 }
 
 export function parseSharedCache(text: string, now: number): { data: any; at: number } | undefined {
@@ -49,27 +48,27 @@ export function parseSharedCache(text: string, now: number): { data: any; at: nu
   return { data: raw.data, at };
 }
 
-function readSharedCache(now: number): { data: any; at: number } | undefined {
+async function readSharedCache(now: number): Promise<{ data: any; at: number } | undefined> {
   let text: string;
   try {
-    text = fs.readFileSync(sharedCachePath(), 'utf8');
+    text = await fs.promises.readFile(sharedCachePath(), 'utf8');
   } catch {
     return undefined;
   }
   return parseSharedCache(text, now);
 }
 
-function writeSharedCache(entry: { data: any; at: number }): void {
+async function writeSharedCache(entry: { data: any; at: number }): Promise<void> {
   const file = sharedCachePath();
   const dir = path.dirname(file);
   const tmp = path.join(dir, `usage-shared.${process.pid}.${sharedWriteSeq++}.tmp`);
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, data: entry.data, at: entry.at, writer: process.pid }));
-    fs.renameSync(tmp, file);
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(tmp, JSON.stringify({ v: 1, data: entry.data, at: entry.at, writer: process.pid }));
+    await fs.promises.rename(tmp, file);
   } catch {
     try {
-      fs.unlinkSync(tmp);
+      await fs.promises.unlink(tmp);
     } catch {
       // ignore
     }
@@ -218,7 +217,7 @@ function usageHeaders(token: string): Record<string, string> {
 // roll-over stays current without re-hitting the endpoint.
 export async function fetchLiveLimits(minIntervalMs: number): Promise<PlanLimits | undefined> {
   const now = Date.now();
-  const shared = readSharedCache(now);
+  const shared = await readSharedCache(now);
   if (shared && (!liveCache || shared.at > liveCache.at)) {
     liveCache = shared;
   }
@@ -272,6 +271,6 @@ export async function fetchLiveLimits(minIntervalMs: number): Promise<PlanLimits
     return cached();
   }
   liveCache = { data: parsed, at };
-  writeSharedCache(liveCache);
+  await writeSharedCache(liveCache);
   return mapped;
 }

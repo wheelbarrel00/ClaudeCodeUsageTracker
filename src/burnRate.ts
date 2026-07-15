@@ -4,8 +4,8 @@
 // utilization. The ETA is anchored to the window's OWN period (5h / 7d), not a
 // short rolling slope, so a 7-day window is judged over days rather than minutes.
 
-import { UsageRecord, TokenCounts } from './types';
-import { estimateCost } from './pricing';
+import { UsageRecord, TokenCounts, totalTokens } from './types';
+import { estimateCost, cheaperTier } from './pricing';
 
 export interface BurnRate {
   tokensPerMin: number;
@@ -18,10 +18,6 @@ export interface BurnRate {
   windowCostUsd: number;
   windowMs: number;
   recordCount: number;
-}
-
-function totalTokens(t: TokenCounts): number {
-  return t.input + t.output + t.cacheWrite + t.cacheRead;
 }
 
 function newTokens(t: TokenCounts): number {
@@ -71,9 +67,16 @@ const RESET_DROP_PTS = 5;
 export const FIVE_HOUR_PERIOD_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Sensitivity is 1/elapsed, so projecting a tenth of the way into a window turns one
-// utilization tick into ten. Only past the halfway mark does the average rate predict.
-const MIN_ELAPSED_FRACTION = 0.5;
+// The pace meter appears from here. Below it the window is too thin to say anything:
+// `util / elapsed` amplifies one tick by 1/elapsed, so at the very start a stray point
+// extrapolates to nonsense.
+const PROJECTION_MIN_ELAPSED_FRACTION = 0.1;
+
+// Confidence in the raw extrapolation reaches full here. Before it, the meter is shrunk
+// toward the current utilization (see projectedUtilization) so a thin early slice can't
+// read as an alarming number; the breach ETA stays gated to this mark so a popup never
+// fires off a damped early reading.
+const CONFIDENCE_FULL_FRACTION = 0.5;
 
 // Within this many points of 100 a single integer tick of the API's utilization swings the
 // projection across the line, so a bare number there is noise. Report "on pace" instead.
@@ -101,20 +104,17 @@ export function etaFromAverageRate(
     return undefined;
   }
   const elapsed = now - (resetsAt - periodMs);
-  if (elapsed < MIN_ELAPSED_FRACTION * periodMs) {
+  if (elapsed < CONFIDENCE_FULL_FRACTION * periodMs) {
     return undefined;
   }
   const ratePerMs = utilization / elapsed; // percent per ms
   return (100 - utilization) / ratePerMs;
 }
 
-// Projected end-of-window utilization at the current average pace: where the
-// percentage lands by reset if you keep going as you have this window so far
-// (utilization extrapolated over the whole period). A live "how hard am I working"
-// meter that stays coherent on any window — always a percentage, never a multi-day
-// number — and works on any plan. Note projectedUtilization > 100 is exactly the
-// breach condition, so the meter and the popup agree. Undefined when the window has
-// reset, hasn't run long enough to project, or hasn't been used / is already full.
+// Projected end-of-window utilization at the current average pace — a coherent "how hard am I
+// working" meter on any window. Before the half-mark the raw extrapolation is shrunk toward the
+// current utilization (a thin early slice would otherwise amplify one tick); past it, > 100 is
+// exactly the breach condition. Undefined when reset, barely underway, or unused/full.
 export function projectedUtilization(
   utilization: number,
   resetsAt: number | undefined,
@@ -126,10 +126,14 @@ export function projectedUtilization(
     return undefined;
   }
   const elapsed = now - (resetsAt - periodMs);
-  if (elapsed < MIN_ELAPSED_FRACTION * periodMs) {
+  if (elapsed < PROJECTION_MIN_ELAPSED_FRACTION * periodMs) {
     return undefined;
   }
-  return (utilization * periodMs) / elapsed;
+  const raw = (utilization * periodMs) / elapsed;
+  // Shrink toward the current utilization until the window is half over: the raw
+  // extrapolation is a knife-edge early, so weight it by progress toward that half-mark.
+  const confidence = Math.min(1, elapsed / (CONFIDENCE_FULL_FRACTION * periodMs));
+  return utilization + (raw - utilization) * confidence;
 }
 
 // True when the projected time-to-limit lands before the window's own reset, i.e.
@@ -258,16 +262,19 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
   const fireThreshold = newly.length ? Math.max(...newly) : undefined;
   firedThresholds = Array.from(new Set([...firedThresholds, ...crossed])).sort((a, b) => a - b);
 
-  // Clearing the dead-band keeps the popup from contradicting a meter that reads "on pace".
-  // recentlyActive gates every annotation too: an average rate cannot tell whether you are
-  // still burning, so without it a heavy-then-idle start keeps advertising a breach.
+  // Clearing the dead-band keeps the breach popup from contradicting a meter that reads
+  // "on pace". The ETA behind atRisk is gated to the half-mark, so a damped early reading
+  // can't trip it.
   const atRisk =
     predictsBreachBeforeReset(etaMs, resetsAt, now) &&
     projectedUtil !== undefined &&
     projectedUtil > 100 + ON_PACE_BAND_PTS;
 
+  // The pace meter needs only utilization + the wall clock, so it shows whenever a sane
+  // projection exists (even idle, self-correcting downward). The weekly 'risk' ETA and breach
+  // popups still require recent activity — an average rate can't tell if you're still burning.
   let annotation: 'projection' | 'eta' | 'none' = 'none';
-  if (etaMode === 'projection' && recentlyActive && projectedUtil !== undefined) {
+  if (etaMode === 'projection' && projectedUtil !== undefined) {
     annotation = 'projection';
   } else if (etaMode === 'risk' && atRisk && recentlyActive && etaMs !== undefined) {
     annotation = 'eta';
@@ -323,22 +330,6 @@ const ADVICE_DEFAULTS: Required<AdviceOptions> = {
   maxAvgOutput: 300,
   minWindowCostUsd: 0.5,
 };
-
-// The next cheaper tier to suggest for a model, or undefined when it is already a
-// budget tier (or unknown), in which case there is nothing to advise.
-export function cheaperTier(model: string): string | undefined {
-  const m = model.toLowerCase();
-  if (m.includes('opus')) {
-    return 'Sonnet';
-  }
-  if (m.includes('fable')) {
-    return 'Sonnet';
-  }
-  if (m.includes('sonnet')) {
-    return 'Haiku';
-  }
-  return undefined;
-}
 
 interface ModelAgg {
   cost: number;

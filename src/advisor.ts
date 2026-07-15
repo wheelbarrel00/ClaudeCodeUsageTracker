@@ -2,8 +2,7 @@
 // is injected so insights read self-contained without the module touching VS Code or locale.
 
 import { UsageRecord } from './types';
-import { estimateCost } from './pricing';
-import { cheaperTier } from './burnRate';
+import { estimateCost, familyOf, familyLabel, cheaperTier } from './pricing';
 import type { SessionSummary } from './dataLoader';
 
 export type InsightSeverity = 'info' | 'tip' | 'warning';
@@ -49,38 +48,6 @@ const FORECAST_MIN_SPEND = 1.0;
 
 const SEVERITY_RANK: Record<InsightSeverity, number> = { warning: 0, tip: 1, info: 2 };
 
-function modelFamily(model: string): string {
-  const m = model.toLowerCase();
-  if (m.includes('opus')) {
-    return 'Opus';
-  }
-  if (m.includes('sonnet')) {
-    return 'Sonnet';
-  }
-  if (m.includes('fable')) {
-    return 'Fable';
-  }
-  if (m.includes('haiku')) {
-    return 'Haiku';
-  }
-  return model;
-}
-
-// Concrete cheaper model id to re-price the same tokens against, mirroring cheaperTier()'s step.
-function cheaperModelId(model: string): string | undefined {
-  const m = model.toLowerCase();
-  if (m.includes('opus')) {
-    return 'claude-sonnet-4-6';
-  }
-  if (m.includes('fable')) {
-    return 'claude-sonnet-4-6';
-  }
-  if (m.includes('sonnet')) {
-    return 'claude-haiku-4-5';
-  }
-  return undefined;
-}
-
 interface ModelAgg {
   count: number;
   currentCost: number;
@@ -93,7 +60,7 @@ interface ModelAgg {
 function modelMixInsight(records: UsageRecord[], money: Money, subscription: boolean): Insight | undefined {
   const agg = new Map<string, ModelAgg>();
   for (const r of records) {
-    const cheaper = cheaperModelId(r.model);
+    const cheaper = familyOf(r.model)?.cheaperId;
     if (!cheaper || r.tokens.output > MODEL_MAX_OUTPUT) {
       continue;
     }
@@ -120,7 +87,7 @@ function modelMixInsight(records: UsageRecord[], money: Money, subscription: boo
     return undefined;
   }
 
-  const family = modelFamily(bestModel);
+  const family = familyLabel(bestModel);
   const label = cheaperTier(bestModel)!;
   const avgOut = Math.round(best.output / best.count);
   return {

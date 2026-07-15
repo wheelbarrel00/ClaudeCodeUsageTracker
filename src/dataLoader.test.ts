@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEntries } from './dataLoader';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
+import { parseEntries, loadUsageRecords, summarizeByProject } from './dataLoader';
+import { UsageRecord, EMPTY_TOKENS } from './types';
 
 function line(overrides: {
   id: string;
@@ -60,4 +64,337 @@ test('a single-line message is unaffected', () => {
   const entries = parseEntries(line({ id: 'msg_1', requestId: 'req_1', output: 42, stop: 'end_turn' }));
   assert.equal(entries.length, 1);
   assert.equal(entries[0].record.tokens.output, 42);
+});
+
+// --- loadUsageRecords: incremental tail parsing against a real temp log root ---
+
+async function withRoot(fn: (projDir: string) => Promise<void>): Promise<void> {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ccut-test-'));
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = root;
+  const projDir = path.join(root, 'projects', 'p');
+  await fs.promises.mkdir(projDir, { recursive: true });
+  try {
+    await fn(projDir);
+  } finally {
+    if (prev === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+}
+
+function outputs(records: { tokens: { output: number } }[]): number[] {
+  return records.map((r) => r.tokens.output).sort((a, b) => a - b);
+}
+
+test('appended lines are tail-parsed and still settle streamed duplicates', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    await fs.promises.writeFile(
+      file,
+      line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) +
+        '\n' +
+        line({ id: 'msg_2', requestId: 'r2', output: 1, stop: null }) +
+        '\n'
+    );
+    assert.deepEqual(outputs(await loadUsageRecords()), [1, 10]);
+
+    await fs.promises.appendFile(
+      file,
+      line({ id: 'msg_2', requestId: 'r2', output: 500, stop: 'tool_use' }) +
+        '\n' +
+        line({ id: 'msg_3', requestId: 'r3', output: 42, stop: 'end_turn' }) +
+        '\n'
+    );
+    assert.deepEqual(outputs(await loadUsageRecords()), [10, 42, 500]);
+  });
+});
+
+test('an unchanged pass reuses the last snapshot without a rebuild', async () => {
+  await withRoot(async (projDir) => {
+    await fs.promises.writeFile(
+      path.join(projDir, 's1.jsonl'),
+      line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) + '\n'
+    );
+    const first = await loadUsageRecords();
+    const second = await loadUsageRecords();
+    assert.equal(second, first); // referential: the memoized array
+  });
+});
+
+test('a truncated/rewritten file is fully re-parsed from scratch', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    await fs.promises.writeFile(
+      file,
+      line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) +
+        '\n' +
+        line({ id: 'msg_2', requestId: 'r2', output: 20, stop: 'end_turn' }) +
+        '\n'
+    );
+    assert.deepEqual(outputs(await loadUsageRecords()), [10, 20]);
+
+    await fs.promises.writeFile(file, line({ id: 'msg_9', requestId: 'r9', output: 77, stop: 'end_turn' }) + '\n');
+    assert.deepEqual(outputs(await loadUsageRecords()), [77]);
+  });
+});
+
+test('a same-size in-place rewrite is detected via mtime and re-parsed', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    const before = line({ id: 'msg_1', requestId: 'r1', output: 5, stop: 'end_turn' }) + '\n';
+    const after = line({ id: 'msg_1', requestId: 'r1', output: 7, stop: 'end_turn' }) + '\n';
+    assert.equal(before.length, after.length);
+    await fs.promises.writeFile(file, before);
+    assert.deepEqual(outputs(await loadUsageRecords()), [5]);
+
+    await fs.promises.writeFile(file, after);
+    const bumped = new Date(Date.now() + 5000);
+    await fs.promises.utimes(file, bumped, bumped); // force a distinct mtime for same-ms writes
+    assert.deepEqual(outputs(await loadUsageRecords()), [7]);
+  });
+});
+
+test('a partial (mid-write) trailing line is held back until it completes', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    const whole = line({ id: 'msg_2', requestId: 'r2', output: 33, stop: 'end_turn' });
+    await fs.promises.writeFile(
+      file,
+      line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) + '\n' + whole.slice(0, 25)
+    );
+    assert.deepEqual(outputs(await loadUsageRecords()), [10]);
+
+    await fs.promises.appendFile(file, whole.slice(25) + '\n');
+    assert.deepEqual(outputs(await loadUsageRecords()), [10, 33]);
+  });
+});
+
+test('an ai-title arriving in the tail retro-applies to earlier entries', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    await fs.promises.writeFile(file, line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) + '\n');
+    const first = await loadUsageRecords();
+    assert.equal(first[0].sessionTitle, undefined);
+
+    await fs.promises.appendFile(file, JSON.stringify({ type: 'ai-title', aiTitle: 'Fix the tests' }) + '\n');
+    const second = await loadUsageRecords();
+    assert.equal(second[0].sessionTitle, 'Fix the tests');
+  });
+});
+
+test('a failed root walk serves the last good snapshot instead of zeros', async () => {
+  await withRoot(async (projDir) => {
+    await fs.promises.writeFile(
+      path.join(projDir, 's1.jsonl'),
+      line({ id: 'msg_1', requestId: 'r1', output: 10, stop: 'end_turn' }) + '\n'
+    );
+    const good = await loadUsageRecords();
+    assert.equal(good.length, 1);
+
+    process.env.CLAUDE_CONFIG_DIR = path.join(os.tmpdir(), 'ccut-definitely-missing', String(process.pid));
+    const fallback = await loadUsageRecords();
+    assert.equal(fallback, good); // last snapshot, not []
+  });
+});
+
+// --- regression tests for the adversarial verify pass ---
+
+// A distinct keyed filler line, unique per index so keyed dedup never collapses it.
+function fillerLine(i: number): string {
+  return line({ id: `fill_${i}`, requestId: `fr_${i}`, output: 1, stop: 'end_turn' });
+}
+
+// An assistant usage line with no message.id / requestId / uuid, so parseUsageEntry
+// assigns it an empty key — the shape that used to double-count on a faulted retry.
+function keylessLine(output: number): string {
+  return JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-07-13T05:00:00.000Z',
+    sessionId: 's1',
+    cwd: '/repo',
+    message: { model: 'claude-opus-4-8', usage: { input_tokens: 5, output_tokens: output, cache_read_input_tokens: 0 } },
+  });
+}
+
+function bytesOver(minBytes: number, startIndex = 0): string {
+  const parts: string[] = [];
+  let size = 0;
+  let i = startIndex;
+  while (size < minBytes) {
+    const l = fillerLine(i++) + '\n';
+    parts.push(l);
+    size += Buffer.byteLength(l);
+  }
+  return parts.join('');
+}
+
+function patchOpenReadFault(shouldThrow: (position: number) => boolean): () => void {
+  const realOpen = fs.promises.open;
+  (fs.promises as any).open = async function (this: unknown, ...args: any[]): Promise<any> {
+    const handle = await (realOpen as any).apply(fs.promises, args);
+    const realRead = handle.read.bind(handle);
+    handle.read = async function (opts: any): Promise<any> {
+      if (typeof opts?.position === 'number' && shouldThrow(opts.position)) {
+        throw Object.assign(new Error('injected read fault'), { code: 'EIO' });
+      }
+      return realRead(opts);
+    };
+    return handle;
+  };
+  return () => {
+    (fs.promises as any).open = realOpen;
+  };
+}
+
+function patchFault(method: 'stat' | 'readdir', shouldThrow: (p: string) => boolean): () => void {
+  const real = (fs.promises as any)[method];
+  (fs.promises as any)[method] = async function (p: any, ...rest: any[]): Promise<any> {
+    if (typeof p === 'string' && shouldThrow(p)) {
+      throw Object.assign(new Error(`injected ${method} fault`), { code: 'EBUSY' });
+    }
+    return real.call(fs.promises, p, ...rest);
+  };
+  return () => {
+    (fs.promises as any)[method] = real;
+  };
+}
+
+test('a >1MiB history parses correctly across chunk boundaries', async () => {
+  await withRoot(async (projDir) => {
+    const count = 4000; // ~1.2MiB of distinct keyed lines, spanning multiple 1MiB reads
+    const body = Array.from({ length: count }, (_, i) => fillerLine(i)).join('\n') + '\n';
+    assert.ok(Buffer.byteLength(body) > 1 << 20);
+    await fs.promises.writeFile(path.join(projDir, 's1.jsonl'), body);
+    const records = await loadUsageRecords();
+    assert.equal(records.length, count);
+  });
+});
+
+test('a mid-read failure on an incremental pass leaves totals unchanged and never double-counts', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    await fs.promises.writeFile(
+      file,
+      line({ id: 'seed_1', requestId: 's1', output: 10, stop: 'end_turn' }) + '\n' +
+        line({ id: 'seed_2', requestId: 's2', output: 20, stop: 'end_turn' }) + '\n'
+    );
+    const seed = await loadUsageRecords();
+    assert.equal(seed.length, 2);
+    const oldSize = (await fs.promises.stat(file)).size;
+
+    // Append the keyless line first (lands in chunk 1, would be committed before a
+    // second-chunk read), then >1MiB of distinct keyed filler so the tail spans two reads.
+    await fs.promises.appendFile(file, keylessLine(777) + '\n' + bytesOver(1 << 20));
+
+    // Fail the SECOND tail read (position strictly past oldSize), after chunk 1 committed.
+    const restore = patchOpenReadFault((position) => position > oldSize);
+    let faulted: UsageRecord[];
+    try {
+      faulted = await loadUsageRecords();
+    } finally {
+      restore();
+    }
+    // The cache was mutated only on success, so the faulted pass shows the seed totals —
+    // not a partial commit of chunk 1.
+    assert.equal(faulted.length, 2);
+    assert.equal(faulted.filter((r) => r.tokens.output === 777).length, 0);
+
+    // The clean retry parses the tail once: the keyless line appears exactly once.
+    const recovered = await loadUsageRecords();
+    assert.equal(recovered.filter((r) => r.tokens.output === 777).length, 1);
+    const again = await loadUsageRecords();
+    assert.equal(again.filter((r) => r.tokens.output === 777).length, 1); // permanence
+  });
+});
+
+test('a grow-past-size rewrite is not mistaken for an append (boundary check forces full re-parse)', async () => {
+  await withRoot(async (projDir) => {
+    const file = path.join(projDir, 's1.jsonl');
+    await fs.promises.writeFile(
+      file,
+      line({ id: 'old_1', requestId: 'o1', output: 11, stop: 'end_turn' }) + '\n' +
+        line({ id: 'old_2', requestId: 'o2', output: 22, stop: 'end_turn' }) + '\n' +
+        line({ id: 'old_3', requestId: 'o3', output: 33, stop: 'end_turn' }) + '\n'
+    );
+    const oldSize = (await fs.promises.stat(file)).size;
+    assert.deepEqual(outputs(await loadUsageRecords()), [11, 22, 33]);
+
+    // One long single line, grown past the old size, whose byte at oldSize-1 is inside
+    // the JSON (not a newline) — a truncate-then-regrow rewrite masquerading as growth.
+    const padded = JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-13T06:00:00.000Z',
+      requestId: 'new_1',
+      sessionId: 's1',
+      cwd: '/repo',
+      pad: 'x'.repeat(oldSize + 2000),
+      message: { id: 'new_1', model: 'claude-opus-4-8', usage: { input_tokens: 1, output_tokens: 99 } },
+    });
+    assert.ok(Buffer.byteLength(padded) > oldSize);
+    const bumped = new Date(Date.now() + 5000);
+    await fs.promises.writeFile(file, padded + '\n');
+    await fs.promises.utimes(file, bumped, bumped);
+    // Only the new record — no phantom old records, no mid-line garbage.
+    assert.deepEqual(outputs(await loadUsageRecords()), [99]);
+  });
+});
+
+test('a subdirectory walk failure serves last-good instead of dipping totals or purging the cache', async () => {
+  await withRoot(async (projDir) => {
+    await fs.promises.writeFile(
+      path.join(projDir, 's1.jsonl'),
+      line({ id: 'm1', requestId: 'r1', output: 10, stop: 'end_turn' }) + '\n' +
+        line({ id: 'm2', requestId: 'r2', output: 20, stop: 'end_turn' }) + '\n'
+    );
+    const good = await loadUsageRecords();
+    assert.equal(good.length, 2);
+
+    const restore = patchFault('readdir', (p) => p === projDir);
+    let dipped: UsageRecord[];
+    try {
+      dipped = await loadUsageRecords();
+    } finally {
+      restore();
+    }
+    assert.equal(dipped, good); // last snapshot, not a dip to []
+  });
+});
+
+test('a per-file stat failure keeps that file’s cached contribution (C8)', async () => {
+  await withRoot(async (projDir) => {
+    const a = path.join(projDir, 'a.jsonl');
+    const b = path.join(projDir, 'b.jsonl');
+    await fs.promises.writeFile(a, line({ id: 'a1', requestId: 'ar1', output: 100, stop: 'end_turn' }) + '\n');
+    await fs.promises.writeFile(b, line({ id: 'b1', requestId: 'br1', output: 200, stop: 'end_turn' }) + '\n');
+    assert.deepEqual(outputs(await loadUsageRecords()), [100, 200]);
+
+    // b changes (forces a rebuild) while a's stat blips: a's history must survive.
+    await fs.promises.appendFile(b, line({ id: 'b2', requestId: 'br2', output: 201, stop: 'end_turn' }) + '\n');
+    const restore = patchFault('stat', (p) => p === a);
+    let out: number[];
+    try {
+      out = outputs(await loadUsageRecords());
+    } finally {
+      restore();
+    }
+    assert.ok(out.includes(100)); // a not dropped for the pass
+    assert.deepEqual(out, [100, 200, 201]);
+  });
+});
+
+function recordWithCwd(cwd: string): UsageRecord {
+  return { timestamp: 1, model: 'claude-opus-4-8', tokens: { ...EMPTY_TOKENS, output: 1 }, cwd, project: path.basename(cwd) };
+}
+
+test('project grouping folds case per the platform filesystem', () => {
+  const groups = summarizeByProject([recordWithCwd('C:\\Repo'), recordWithCwd('c:\\repo')], 'flat');
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    assert.equal(groups.length, 1); // case-insensitive FS: one project
+  } else {
+    assert.equal(groups.length, 2); // case-sensitive FS: distinct projects
+  }
 });

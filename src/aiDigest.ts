@@ -1,11 +1,11 @@
 // vscode/network/secret-free so it can be unit-tested directly; network + secrets live in aiAdvisor.ts.
 
 import * as fs from 'fs';
-import * as path from 'path';
 import { UsageRecord } from './types';
 import type { PlanLimits } from './limitsReader';
 import {
   claudeLogRoot,
+  findJsonlFiles,
   summarize,
   summarizeByModel,
   summarizeBySession,
@@ -148,31 +148,21 @@ export function extractUserPrompt(line: string): string | undefined {
 }
 
 async function recentJsonlFiles(root: string): Promise<string[]> {
-  const all: { file: string; mtime: number }[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(full);
-      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        try {
-          const st = await fs.promises.stat(full);
-          all.push({ file: full, mtime: st.mtimeMs });
-        } catch {
-          /* unreadable file */
-        }
+  const files = (await findJsonlFiles(root)) ?? [];
+  const stamped = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return { file, mtime: (await fs.promises.stat(file)).mtimeMs };
+      } catch {
+        return undefined;
       }
-    }
-  }
-  await walk(root);
-  all.sort((a, b) => b.mtime - a.mtime);
-  return all.slice(0, SAMPLE_MAX_SESSIONS).map((x) => x.file);
+    })
+  );
+  return stamped
+    .filter((x): x is { file: string; mtime: number } => x !== undefined)
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, SAMPLE_MAX_SESSIONS)
+    .map((x) => x.file);
 }
 
 // Only called after the user has opted in and confirmed.

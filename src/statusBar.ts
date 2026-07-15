@@ -1,9 +1,21 @@
 import * as vscode from 'vscode';
-import { UsageSummary } from './types';
+import { UsageSummary, totalTokens } from './types';
 import { ContextInfo } from './dataLoader';
-import { PlanLimits, LimitWindow, ScopedLimit, ExtraUsage, formatReset, formatAge, formatExtraSpend } from './limitsReader';
+import {
+  PlanLimits,
+  LimitWindow,
+  ScopedLimit,
+  ExtraUsage,
+  SeverityBand,
+  severityBand,
+  formatReset,
+  formatAge,
+  formatExtraSpend,
+} from './limitsReader';
 import { PredictionView } from './prediction';
-import { isSubscription } from './credentials';
+import { hasSubscription } from './credentials';
+import { sanitizeThresholds } from './burnRate';
+import { formatCurrency } from './format';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
@@ -16,16 +28,18 @@ export class StatusBarController {
   private readonly main: vscode.StatusBarItem;
 
   constructor() {
-    this.fiveHour = this.createItem(104);
-    this.weekly = this.createItem(103);
-    this.opus = this.createItem(102);
-    this.main = this.createItem(101);
+    this.fiveHour = this.createItem('fiveHourLimit', 'Claude Usage: 5-Hour Limit', 104);
+    this.weekly = this.createItem('weeklyLimit', 'Claude Usage: Weekly Limit', 103);
+    this.opus = this.createItem('opusLimit', 'Claude Usage: Opus Weekly Limit', 102);
+    this.main = this.createItem('main', 'Claude Usage', 101);
     this.main.text = `${ICON} Claude usage`;
     this.main.show();
   }
 
-  private createItem(priority: number): vscode.StatusBarItem {
-    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, priority);
+  // Distinct ids + names keep the four items tellable apart in the "Hide" menu, each with its own visibility.
+  private createItem(id: string, name: string, priority: number): vscode.StatusBarItem {
+    const item = vscode.window.createStatusBarItem(`${CONFIG_SECTION}.${id}`, vscode.StatusBarAlignment.Right, priority);
+    item.name = name;
     item.command = `${CONFIG_SECTION}.showDashboard`;
     item.tooltip = 'Claude Code Usage Tracker';
     return item;
@@ -45,14 +59,15 @@ export class StatusBarController {
 
     const extra = showExtraUsage && limits?.extraUsage?.isEnabled ? limits.extraUsage : undefined;
     const pred = prediction?.enabled ? prediction : undefined;
-    const subscription = isSubscription() || !!(limits?.fiveHour || limits?.sevenDay);
+    const subscription = hasSubscription(limits);
+    const thresholds = sanitizeThresholds(cfg.get<number[]>('predictiveAlerts.warnThresholds', [75, 90]));
     const predTip = pred ? predictionTooltip(pred, currency, decimals, subscription) : undefined;
     const tooltip = buildTooltip(showLimits ? limits : undefined, showContext ? context : undefined, extra, predTip);
 
     const live = showLimits ? limits : undefined;
-    this.renderLimit(this.fiveHour, '5h', live?.fiveHour, tooltip, pred?.fiveHour?.segment);
-    this.renderLimit(this.weekly, 'wk', live?.sevenDay, tooltip, pred?.sevenDay?.segment);
-    this.renderLimit(this.opus, 'opus', showOpusWeekly && live ? opusWindow(live) : undefined, tooltip);
+    this.renderLimit(this.fiveHour, '5h', live?.fiveHour, thresholds, tooltip, pred?.fiveHour?.segment);
+    this.renderLimit(this.weekly, 'wk', live?.sevenDay, thresholds, tooltip, pred?.sevenDay?.segment);
+    this.renderLimit(this.opus, 'opus', showOpusWeekly && live ? opusWindow(live) : undefined, thresholds, tooltip);
 
     const parts: string[] = [];
     if (showContext && context) {
@@ -62,7 +77,7 @@ export class StatusBarController {
       parts.push(formatCurrency(summary.costUsd, currency, decimals));
     }
     if (showTokens) {
-      parts.push(`${formatTokens(totalTokens(summary))} tok`);
+      parts.push(`${formatTokens(totalTokens(summary.tokens))} tok`);
     }
     if (extra) {
       const spend = formatExtraSpend(extra);
@@ -83,6 +98,7 @@ export class StatusBarController {
     item: vscode.StatusBarItem,
     label: string,
     window: LimitWindow | undefined,
+    thresholds: number[],
     tooltip: string,
     segment?: string
   ): void {
@@ -92,7 +108,7 @@ export class StatusBarController {
     }
     const suffix = segment ? ` ${segment}` : '';
     item.text = `${ICON} ${label} ${Math.round(window.utilization)}%${suffix}`;
-    item.color = severityColor(window.severity);
+    item.color = bandColor(severityBand(window, thresholds));
     item.tooltip = tooltip;
     item.show();
   }
@@ -109,17 +125,14 @@ function opusWindow(limits: PlanLimits): ScopedLimit | undefined {
   return limits.scoped.find((scoped) => /opus/i.test(scoped.label));
 }
 
-function severityColor(severity?: string): vscode.ThemeColor | undefined {
-  switch (severity) {
-    case 'critical':
+function bandColor(band: SeverityBand): vscode.ThemeColor {
+  switch (band) {
     case 'error':
       return new vscode.ThemeColor('charts.red');
     case 'warning':
       return new vscode.ThemeColor('charts.yellow');
-    case 'normal':
-      return new vscode.ThemeColor('charts.green');
     default:
-      return undefined;
+      return new vscode.ThemeColor('charts.green');
   }
 }
 
@@ -210,24 +223,6 @@ function limitLine(label: string, window: LimitWindow, detail?: string): string 
     parts.push(detail);
   }
   return `${label}: ${parts.join('  ·  ')}`;
-}
-
-function totalTokens(summary: UsageSummary): number {
-  const t = summary.tokens;
-  return t.input + t.output + t.cacheWrite + t.cacheRead;
-}
-
-function formatCurrency(value: number, currency: string, decimals: number): string {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    }).format(value);
-  } catch {
-    return `$${value.toFixed(decimals)}`;
-  }
 }
 
 function formatTokens(count: number): string {
