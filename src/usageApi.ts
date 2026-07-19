@@ -2,7 +2,7 @@ import * as https from 'https';
 import * as fs from 'fs';
 import * as path from 'path';
 import { mapUsageData, PlanLimits } from './limitsReader';
-import { readOAuth, isExpiring, OAuthCredentials } from './credentials';
+import { readOAuthAsync, isExpiring, OAuthCredentials } from './credentials';
 import { claudeConfigDir } from './paths';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
@@ -230,7 +230,7 @@ export async function fetchLiveLimits(minIntervalMs: number): Promise<PlanLimits
   if (now < backoffUntil || now - lastAttemptAt < minIntervalMs) {
     return cached();
   }
-  const oauth = readOAuth();
+  const oauth = await readOAuthAsync();
   if (!oauth) {
     return cached();
   }

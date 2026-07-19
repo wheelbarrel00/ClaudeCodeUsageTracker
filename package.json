@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -91,7 +91,7 @@
         "claudeCodeUsageTracker.useLiveApi": {
           "type": "boolean",
           "default": true,
-          "description": "Fetch current plan limits live from Anthropic's usage endpoint (using the OAuth token in ~/.claude/.credentials.json) so they stay accurate even when Claude Code hasn't refreshed its on-disk cache. Falls back to the cache file if the live request fails. Turn off to read only the cache file."
+          "description": "Fetch current plan limits live from Anthropic's usage endpoint (using Claude Code's own OAuth token — read from ~/.claude/.credentials.json, or the macOS login Keychain) so they stay accurate even when Claude Code hasn't refreshed its on-disk cache. Falls back to the cache file if the live request fails. Turn off to read only the cache file."
         },
         "claudeCodeUsageTracker.liveApiMinIntervalSeconds": {
           "type": "number",

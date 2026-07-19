@@ -56,7 +56,8 @@ aggregates feed the trend chart; the rest feed the cards and breakdown tables.
 Plan limits come from a second source. By default the extension fetches them
 **live** from Anthropic's usage endpoint (`GET /api/oauth/usage` on
 `api.anthropic.com`) &mdash; the same call Claude Code makes &mdash; authenticated
-with the OAuth token in `~/.claude/.credentials.json`. This keeps the 5-hour and
+with Claude Code's OAuth token (from `~/.claude/.credentials.json`, or the login
+Keychain on macOS, where Claude Code keeps it instead). This keeps the 5-hour and
 weekly figures current even during a long session, when Claude Code's own on-disk
 cache (`~/.claude/usage-cache.json`) can sit hours stale. If the live request
 fails for any reason, the extension falls back to that cache file; a window whose
@@ -69,8 +70,9 @@ prompt size (input + cache) over the model's window &mdash; 200K, or 1M when the
 prompt or model marks the long-context tier.
 
 **Privacy.** The live fetch reads your OAuth token from
-`~/.claude/.credentials.json` (honoring `CLAUDE_CONFIG_DIR`) **read-only** &mdash;
-it is never written back &mdash; and talks only to Anthropic's own hosts
+`~/.claude/.credentials.json` (honoring `CLAUDE_CONFIG_DIR`), or from the login
+Keychain on macOS, **read-only** &mdash; it is never written back &mdash; and talks
+only to Anthropic's own hosts
 (`api.anthropic.com` for usage, and `platform.claude.com` only if the token needs
 refreshing, which is held in memory). Set `useLiveApi` to `false` to read only
 the local cache file and make no network requests.
@@ -145,7 +147,8 @@ figures already on screen and makes no extra network calls.
 2. **Use Claude Code at least once** so it writes its logs under `~/.claude`. The
    extension reads them automatically &mdash; nothing to configure for the status
    bar, dashboard, and limits to populate.
-3. **Sign in to Claude Code** (so `~/.claude/.credentials.json` exists) for live,
+3. **Sign in to Claude Code** (so your credentials exist &mdash; in
+   `~/.claude/.credentials.json`, or the login Keychain on macOS) for live,
    always-current plan limits; without it, the extension falls back to Claude Code's
    on-disk cache.
 4. The status bar fills in on the next refresh. Click any segment, or run **Claude
@@ -188,8 +191,9 @@ extension reads the JSONL transcripts it writes under `~/.claude/projects`. If
 that folder doesn't exist or has no sessions yet, there's nothing to show.
 
 **Plan-limit bars don't appear.**
-The 5-hour / weekly figures are fetched live from Anthropic using the OAuth token
-in `~/.claude/.credentials.json`, falling back to `~/.claude/usage-cache.json`. If
+The 5-hour / weekly figures are fetched live from Anthropic using Claude Code's
+OAuth token (from `~/.claude/.credentials.json`, or the login Keychain on macOS),
+falling back to `~/.claude/usage-cache.json`. If
 neither is available, run Claude Code once (and sign in) so the credentials and
 cache exist. The status-bar segments also honor the `showLimits` setting and only
 appear while a limit window is live. Set `useLiveApi` to `false` to use the cache

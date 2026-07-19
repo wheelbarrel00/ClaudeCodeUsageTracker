@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.5.1] - 2026-07-19
+
+### Fixed
+- **Live plan limits and subscription detection now work on macOS.** Claude Code
+  stores its OAuth credentials in the login **Keychain** on macOS, not in
+  `~/.claude/.credentials.json` — so the live-limits fetch found no token and
+  silently fell back to the on-disk cache (which can sit hours stale). The
+  extension now reads the token from the Keychain (the same
+  `Claude Code-credentials` item Claude Code itself writes) **read-only**, and
+  still prefers the credentials file when one is present. Windows and Linux are
+  unchanged.
+
 ## [1.5.0] - 2026-07-14
 
 ### Fixed
