@@ -1,6 +1,7 @@
 // vscode/network/secret-free so it can be unit-tested directly; network + secrets live in aiAdvisor.ts.
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { UsageRecord } from './types';
 import type { PlanLimits } from './limitsReader';
 import {
@@ -13,6 +14,9 @@ import {
 import { analyze } from './advisor';
 
 const SAMPLE_MAX_SESSIONS = 5;
+// Scoping applied after taking the newest few machine-wide collected nothing: those are usually
+// subagent transcripts (no user prompts) or other projects.
+const SAMPLE_SCAN_LIMIT = 40;
 const SAMPLE_PER_SESSION = 3;
 const SAMPLE_MAX_TOTAL = 12;
 const SAMPLE_MAX_LEN = 280;
@@ -114,7 +118,7 @@ export function systemPrompt(includePrompts: boolean, subscription = false): str
 }
 
 // Skips non-typed prompts: tool results, sidechains, and command/system wrappers (which start with '<').
-export function extractUserPrompt(line: string): string | undefined {
+export function extractUserPrompt(line: string, allowedCwds: string[] = []): string | undefined {
   let raw: any;
   try {
     raw = JSON.parse(line);
@@ -122,6 +126,9 @@ export function extractUserPrompt(line: string): string | undefined {
     return undefined;
   }
   if (!raw || raw.type !== 'user' || raw.isSidechain || raw.isMeta) {
+    return undefined;
+  }
+  if (allowedCwds.length > 0 && !isUnderAny(raw.cwd, allowedCwds)) {
     return undefined;
   }
   const content = raw.message?.content;
@@ -147,6 +154,17 @@ export function extractUserPrompt(line: string): string | undefined {
   return clean.length > SAMPLE_MAX_LEN ? `${clean.slice(0, SAMPLE_MAX_LEN - 1)}…` : clean;
 }
 
+function isUnderAny(cwd: unknown, allowedCwds: string[]): boolean {
+  if (typeof cwd !== 'string' || !cwd) {
+    return false;
+  }
+  // path.relative, not startsWith: settles separators, Windows case, and "…TrackerExtra" vs "…Tracker".
+  return allowedCwds.some((root) => {
+    const rel = path.relative(root, cwd);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
+}
+
 async function recentJsonlFiles(root: string): Promise<string[]> {
   const files = (await findJsonlFiles(root)) ?? [];
   const stamped = await Promise.all(
@@ -161,12 +179,16 @@ async function recentJsonlFiles(root: string): Promise<string[]> {
   return stamped
     .filter((x): x is { file: string; mtime: number } => x !== undefined)
     .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, SAMPLE_MAX_SESSIONS)
     .map((x) => x.file);
 }
 
-// Only called after the user has opted in and confirmed.
-export async function collectPromptSamples(): Promise<string[]> {
+// Only called after the user has opted in and confirmed. allowedCwds scopes the sample to the
+// open workspace; ~/.claude/projects holds every project on the machine.
+export async function collectPromptSamples(allowedCwds: string[]): Promise<string[]> {
+  // Fails closed: no scope means no way to keep another project's prompts out.
+  if (allowedCwds.length === 0) {
+    return [];
+  }
   let files: string[];
   try {
     files = await recentJsonlFiles(claudeLogRoot());
@@ -174,8 +196,9 @@ export async function collectPromptSamples(): Promise<string[]> {
     return [];
   }
   const samples: string[] = [];
-  for (const file of files) {
-    if (samples.length >= SAMPLE_MAX_TOTAL) {
+  let sessions = 0;
+  for (const file of files.slice(0, SAMPLE_SCAN_LIMIT)) {
+    if (samples.length >= SAMPLE_MAX_TOTAL || sessions >= SAMPLE_MAX_SESSIONS) {
       break;
     }
     let text: string;
@@ -191,11 +214,14 @@ export async function collectPromptSamples(): Promise<string[]> {
       if (!trimmed) {
         continue;
       }
-      const prompt = extractUserPrompt(trimmed);
+      const prompt = extractUserPrompt(trimmed, allowedCwds);
       if (prompt) {
         samples.push(prompt);
         perSession += 1;
       }
+    }
+    if (perSession > 0) {
+      sessions += 1;
     }
   }
   return samples;

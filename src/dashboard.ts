@@ -43,7 +43,10 @@ export class Dashboard {
   private limits: PlanLimits | undefined;
   private ready = false;
   private aiInFlight = false;
+  private aiRunId = 0;
   private lastAiHtml: string | undefined;
+  private postTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastPostAt = 0;
 
   constructor(private readonly ai?: AiAdvisor) {}
 
@@ -51,7 +54,8 @@ export class Dashboard {
     this.records = records;
     this.limits = limits;
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Active);
+      // Its own column, not Active: revealing into Active drags the panel out of its editor group.
+      this.panel.reveal(this.panel.viewColumn);
       if (this.ready) {
         this.post();
       }
@@ -68,6 +72,10 @@ export class Dashboard {
       this.panel = undefined;
       this.ready = false;
       this.lastAiHtml = undefined;
+      this.clearPostTimer();
+      // explain() can block indefinitely on its own dialogs, so release the guard here too.
+      this.aiRunId += 1;
+      this.aiInFlight = false;
     });
     // Without retainContextWhenHidden the webview reloads on reveal (re-posting 'ready'); drop
     // readiness on hide so a stale post can't race the reload.
@@ -99,23 +107,54 @@ export class Dashboard {
     this.limits = limits;
     // A hidden panel is torn down; the reload's 'ready' handshake re-sends the latest data on reveal.
     if (this.panel?.visible && this.ready) {
-      this.post();
+      this.schedulePost();
+    }
+  }
+
+  // buildPayload makes 15-20 full passes over every record and the watcher can fire every 750ms.
+  private schedulePost(): void {
+    if (this.postTimer) {
+      return;
+    }
+    const wait = Math.max(0, MIN_POST_INTERVAL_MS - (Date.now() - this.lastPostAt));
+    this.postTimer = setTimeout(() => {
+      this.postTimer = undefined;
+      if (this.panel?.visible && this.ready) {
+        this.post();
+      }
+    }, wait);
+  }
+
+  private clearPostTimer(): void {
+    if (this.postTimer) {
+      clearTimeout(this.postTimer);
+      this.postTimer = undefined;
     }
   }
 
   private post(): void {
     if (this.panel) {
+      this.lastPostAt = Date.now();
       this.panel.webview.postMessage(buildPayload(this.records, this.limits, this.ai !== undefined));
     }
   }
 
   private async runAi(): Promise<void> {
-    if (!this.ai || this.aiInFlight) {
+    if (!this.ai) {
+      return;
+    }
+    if (this.aiInFlight) {
+      // The webview has already painted its spinner; a silent return leaves it stuck.
+      this.panel?.webview.postMessage({
+        type: 'aiResult',
+        html: renderAiHtml({ ok: false, error: 'An explanation is already being generated — one moment.' }),
+      });
       return;
     }
     // Drop the result if the panel was closed/replaced mid-request — else the next dashboard
     // would replay a stale, unrequested AI box on its 'ready' handshake.
     const panel = this.panel;
+    const runId = ++this.aiRunId;
     this.aiInFlight = true;
     let result: AiResult;
     try {
@@ -124,7 +163,10 @@ export class Dashboard {
       // Without this the webview's "Analyzing your usage…" spinner would hang forever.
       result = { ok: false, error: `AI explanation failed: ${err instanceof Error ? err.message : String(err)}` };
     } finally {
-      this.aiInFlight = false;
+      // Only if this run still owns the guard: a request abandoned by a panel close must not unlock a newer one.
+      if (this.aiRunId === runId) {
+        this.aiInFlight = false;
+      }
     }
     if (this.panel !== panel) {
       return;
@@ -136,9 +178,12 @@ export class Dashboard {
   }
 
   dispose(): void {
+    this.clearPostTimer();
     this.panel?.dispose();
   }
 }
+
+const MIN_POST_INTERVAL_MS = 1000;
 
 interface ChartSet {
   daily: { cost: string; tokens: string };

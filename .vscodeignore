@@ -11,10 +11,11 @@ tsconfig.json
 .git/**
 .claude/**
 *.vsix
-CLAUDE.md
-HANDOFF.md
-AUDIT-STATUS.md
-CRASH-INVESTIGATION.md
+# Allowlist rather than a denylist: every new working note was shipping until someone
+# remembered to add it here.
+*.md
+!README.md
+!CHANGELOG.md
 *.ps1
 images/**
 !images/stats.png

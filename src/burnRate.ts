@@ -39,7 +39,7 @@ export function burnRate(records: UsageRecord[], now: number, windowMs: number):
     }
     windowTokens += totalTokens(record.tokens);
     windowNewTokens += newTokens(record.tokens);
-    windowCostUsd += estimateCost(record.tokens, record.model);
+    windowCostUsd += estimateCost(record.tokens, record.model, record.speed);
     recordCount++;
   }
   const minutes = windowMs / 60000;
@@ -56,10 +56,13 @@ export function burnRate(records: UsageRecord[], now: number, windowMs: number):
   };
 }
 
-// A utilization drop larger than this (percentage points) is read as the window
-// having reset/rolled over rather than measurement jitter. A real reset drops the
-// number far (typically to ~0), so this sits well above sample noise.
+// A utilization drop larger than this (percentage points) is read as the window having
+// reset/rolled over rather than measurement jitter.
 const RESET_DROP_PTS = 5;
+
+// A rollover must also land near empty: nothing consumes most of a window between two refreshes,
+// so an 8-point drop (82% -> 74%) is a dip, not a reset.
+const RESET_FLOOR_PCT = 10;
 
 // The fixed length of each Claude limit window, used to anchor the average-rate
 // ETA (windowStart = resetsAt - period). The session (5-hour) and weekly (7-day)
@@ -94,13 +97,16 @@ export function etaFromAverageRate(
   periodMs: number,
   now: number
 ): number | undefined {
-  // Gate the 0/100 boundary on the rounded (displayed) value so a window shown as
-  // "100%" never also advertises an ETA, and one shown as "0%" never does. Also bail
-  // once the window has already reset (resetsAt in the past): the average-rate model
-  // is only defined within the window, and a stale fallback reading could otherwise
-  // present a past resets_at with non-zero utilization.
+  // NaN passes both bounds below (every comparison is false), so reject it explicitly.
   const shown = Math.round(utilization);
-  if (resetsAt === undefined || resetsAt <= now || periodMs <= 0 || shown <= 0 || shown >= 100) {
+  if (
+    resetsAt === undefined ||
+    resetsAt <= now ||
+    periodMs <= 0 ||
+    !Number.isFinite(utilization) ||
+    shown <= 0 ||
+    shown >= 100
+  ) {
     return undefined;
   }
   const elapsed = now - (resetsAt - periodMs);
@@ -111,18 +117,23 @@ export function etaFromAverageRate(
   return (100 - utilization) / ratePerMs;
 }
 
-// Projected end-of-window utilization at the current average pace — a coherent "how hard am I
-// working" meter on any window. Before the half-mark the raw extrapolation is shrunk toward the
-// current utilization (a thin early slice would otherwise amplify one tick); past it, > 100 is
-// exactly the breach condition. Undefined when reset, barely underway, or unused/full.
-export function projectedUtilization(
+// Two readings of one pace: damped is what the meter shows, raw is what a verdict is judged on.
+// Damping may only soften an alarming number, never justify reassurance.
+function projections(
   utilization: number,
   resetsAt: number | undefined,
   periodMs: number,
   now: number
-): number | undefined {
+): { raw: number; damped: number } | undefined {
   const shown = Math.round(utilization);
-  if (resetsAt === undefined || resetsAt <= now || periodMs <= 0 || shown <= 0 || shown >= 100) {
+  if (
+    resetsAt === undefined ||
+    resetsAt <= now ||
+    periodMs <= 0 ||
+    !Number.isFinite(utilization) ||
+    shown <= 0 ||
+    shown >= 100
+  ) {
     return undefined;
   }
   const elapsed = now - (resetsAt - periodMs);
@@ -130,10 +141,17 @@ export function projectedUtilization(
     return undefined;
   }
   const raw = (utilization * periodMs) / elapsed;
-  // Shrink toward the current utilization until the window is half over: the raw
-  // extrapolation is a knife-edge early, so weight it by progress toward that half-mark.
   const confidence = Math.min(1, elapsed / (CONFIDENCE_FULL_FRACTION * periodMs));
-  return utilization + (raw - utilization) * confidence;
+  return { raw, damped: utilization + (raw - utilization) * confidence };
+}
+
+export function projectedUtilization(
+  utilization: number,
+  resetsAt: number | undefined,
+  periodMs: number,
+  now: number
+): number | undefined {
+  return projections(utilization, resetsAt, periodMs, now)?.damped;
 }
 
 // True when the projected time-to-limit lands before the window's own reset, i.e.
@@ -163,8 +181,12 @@ export function crossedThresholds(utilization: number, thresholds: number[]): nu
     .sort((a, b) => a - b);
 }
 
-export function describeProjection(projectedUtil: number): { segment: string; detail: string } {
-  if (Math.abs(projectedUtil - 100) <= ON_PACE_BAND_PTS) {
+// rawUtil decides the verdict; projectedUtil supplies the number.
+export function describeProjection(
+  projectedUtil: number,
+  rawUtil = projectedUtil
+): { segment: string; detail: string } {
+  if (Math.abs(rawUtil - 100) <= ON_PACE_BAND_PTS) {
     return { segment: '· on pace', detail: 'on pace to use this window fully' };
   }
   const pct = Math.round(Math.min(projectedUtil, 999));
@@ -220,7 +242,8 @@ export interface WindowInput {
 export interface WindowOutcome {
   state: WindowState;
   etaMs?: number; // time-to-limit (for the breach message and the 'risk' annotation)
-  projectedUtil?: number; // projected end-of-window % (for the 'projection' annotation)
+  projectedUtil?: number; // damped projected end-of-window % — the annotation's number
+  rawProjectedUtil?: number; // undamped projection — decides the on-pace verdict
   annotation: 'projection' | 'eta' | 'none'; // what, if anything, to show by the %
   fireThreshold?: number; // a threshold to notify on this tick, else undefined
   fireBreach: boolean;
@@ -241,21 +264,28 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
   const resetMoved =
     prev.lastResetsAt !== undefined && resetsAt !== undefined && resetsAt > prev.lastResetsAt;
   // The 5-hour window clears its resets_at right after rolling over (applyExpiry).
-  // Only treat a vanished resets_at as a rollover when utilization corroborates it
-  // (i.e. it didn't stay high) — otherwise resets_at merely dropping out of a payload
-  // at unchanged high utilization would spuriously re-arm and re-fire a threshold.
   const resetCleared =
     prev.lastResetsAt !== undefined &&
     resetsAt === undefined &&
-    (prev.lastUtil === undefined || utilization < prev.lastUtil);
-  const dropped = prev.lastUtil !== undefined && utilization < prev.lastUtil - RESET_DROP_PTS;
-  const rolledOver = resetMoved || resetCleared || dropped;
+    (prev.lastUtil === undefined || utilization <= RESET_FLOOR_PCT);
+  const dropped =
+    prev.lastUtil !== undefined &&
+    utilization < prev.lastUtil - RESET_DROP_PTS &&
+    utilization <= RESET_FLOOR_PCT;
+  // A window that had no resets_at and now has one has started a new period.
+  const resetAppeared =
+    prev.lastResetsAt === undefined &&
+    resetsAt !== undefined &&
+    prev.lastUtil !== undefined &&
+    utilization < prev.lastUtil - RESET_DROP_PTS;
+  const rolledOver = resetMoved || resetCleared || resetAppeared || dropped;
 
   let firedThresholds = rolledOver ? [] : prev.firedThresholds;
   let breachWarned = rolledOver ? false : prev.breachWarned;
 
   const etaMs = etaFromAverageRate(utilization, resetsAt, periodMs, now);
-  const projectedUtil = projectedUtilization(utilization, resetsAt, periodMs, now);
+  const projection = projections(utilization, resetsAt, periodMs, now);
+  const projectedUtil = projection?.damped;
 
   const crossed = crossedThresholds(utilization, thresholds);
   const newly = crossed.filter((threshold) => !firedThresholds.includes(threshold));
@@ -289,6 +319,7 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
     state: { firedThresholds, breachWarned, lastResetsAt: resetsAt, lastUtil: utilization },
     etaMs,
     projectedUtil,
+    rawProjectedUtil: projection?.raw,
     annotation,
     fireThreshold,
     fireBreach,
@@ -355,7 +386,7 @@ export function modelAdvice(
     if (record.timestamp <= start || record.timestamp > now) {
       continue;
     }
-    const cost = estimateCost(record.tokens, record.model);
+    const cost = estimateCost(record.tokens, record.model, record.speed);
     total += cost;
     const agg = groups.get(record.model) ?? { cost: 0, output: 0, count: 0 };
     agg.cost += cost;

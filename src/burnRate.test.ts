@@ -15,6 +15,7 @@ import {
   modelAdvice,
   FIVE_HOUR_PERIOD_MS,
   SEVEN_DAY_PERIOD_MS,
+  ON_PACE_BAND_PTS,
   EtaMode,
   WindowState,
 } from './burnRate';
@@ -539,4 +540,179 @@ test('modelAdvice never flags a budget model', () => {
   const now = 100 * MIN;
   const records = Array.from({ length: 8 }, (_, i) => record(now - (i + 1) * MIN, { input: 10_000_000, output: 100 }, 'claude-haiku-4-5'));
   assert.equal(modelAdvice(records, now, 15 * MIN), undefined);
+});
+
+test('a heavy early burn is not reported as "on pace" just because damping lands near 100', () => {
+  const now = Date.now();
+  const resetsAt = now + 4.4 * 60 * 60 * 1000; // 36 min into a 5h window
+  const damped = projectedUtilization(36, resetsAt, FIVE_HOUR_PERIOD_MS, now)!;
+  assert.ok(Math.abs(damped - 100) <= ON_PACE_BAND_PTS, 'precondition: damped lands in the band');
+
+  const outcome = evaluateWindow(emptyWindowState(), {
+    utilization: 36,
+    resetsAt,
+    periodMs: FIVE_HOUR_PERIOD_MS,
+    now,
+    thresholds: [75, 90],
+    predictBreach: true,
+    etaMode: 'projection',
+    recentlyActive: true,
+  });
+  assert.equal(Math.round(outcome.rawProjectedUtil!), 300);
+  assert.notEqual(describeProjection(outcome.projectedUtil!, outcome.rawProjectedUtil).segment, '· on pace');
+});
+
+test('a genuinely on-pace window still reads "on pace"', () => {
+  const now = Date.now();
+  const resetsAt = now + 1 * 60 * 60 * 1000; // 4h into a 5h window
+  const outcome = evaluateWindow(emptyWindowState(), {
+    utilization: 80,
+    resetsAt,
+    periodMs: FIVE_HOUR_PERIOD_MS,
+    now,
+    thresholds: [95],
+    predictBreach: false,
+    etaMode: 'projection',
+    recentlyActive: true,
+  });
+  assert.equal(describeProjection(outcome.projectedUtil!, outcome.rawProjectedUtil).segment, '· on pace');
+});
+
+test('describeProjection judges the verdict on the raw pace but prints the damped number', () => {
+  assert.equal(describeProjection(100.8, 360).segment, '→ 101%');
+  assert.equal(describeProjection(103.2, 103.2).segment, '· on pace');
+  assert.equal(describeProjection(48, 48).segment, '→ 48%');
+});
+
+test('non-finite utilization yields no projection or ETA rather than rendering NaN', () => {
+  const now = Date.now();
+  const resetsAt = now + 2 * 60 * 60 * 1000;
+  // Only NaN reaches the new guard: the infinities were already caught by the 0/100 bounds.
+  assert.equal(projectedUtilization(NaN, resetsAt, FIVE_HOUR_PERIOD_MS, now), undefined);
+  assert.equal(etaFromAverageRate(NaN, resetsAt, FIVE_HOUR_PERIOD_MS, now), undefined);
+  for (const bounded of [Infinity, -Infinity]) {
+    assert.equal(projectedUtilization(bounded, resetsAt, FIVE_HOUR_PERIOD_MS, now), undefined);
+  }
+});
+
+// A rollover was inferred from a drop alone, so a 0.1-point dip alongside a vanished resets_at
+// (exactly what applyExpiry produces for the 5-hour window) re-armed every alert and re-fired
+// them. A genuine reset always lands the window near empty.
+function windowInput(utilization: number, resetsAt: number | undefined, now: number) {
+  return {
+    utilization,
+    resetsAt,
+    periodMs: FIVE_HOUR_PERIOD_MS,
+    now,
+    thresholds: [75, 90],
+    predictBreach: true,
+    etaMode: 'projection' as EtaMode,
+    recentlyActive: true,
+  };
+}
+
+test('a tiny dip alongside a vanished resets_at does not re-fire a threshold', () => {
+  const now = Date.now();
+  const prev: WindowState = {
+    firedThresholds: [75],
+    breachWarned: true,
+    lastResetsAt: now + 60 * 60 * 1000,
+    lastUtil: 85,
+  };
+  const outcome = evaluateWindow(prev, windowInput(84.9, undefined, now));
+  assert.equal(outcome.fireThreshold, undefined);
+  assert.deepEqual(outcome.state.firedThresholds, [75]);
+  assert.equal(outcome.state.breachWarned, true);
+});
+
+test('a large mid-window drop that stays high is a dip, not a rollover', () => {
+  const now = Date.now();
+  const prev: WindowState = {
+    firedThresholds: [75],
+    breachWarned: true,
+    lastResetsAt: now + 60 * 60 * 1000,
+    lastUtil: 82,
+  };
+  const outcome = evaluateWindow(prev, windowInput(74, now + 60 * 60 * 1000, now));
+  assert.equal(outcome.fireThreshold, undefined);
+  assert.deepEqual(outcome.state.firedThresholds, [75]);
+});
+
+test('a genuine rollover lands near empty and re-arms every alert', () => {
+  const now = Date.now();
+  const prev: WindowState = {
+    firedThresholds: [75, 90],
+    breachWarned: true,
+    lastResetsAt: now - 1000,
+    lastUtil: 93,
+  };
+  const outcome = evaluateWindow(prev, windowInput(0, undefined, now));
+  assert.deepEqual(outcome.state.firedThresholds, []);
+  assert.equal(outcome.state.breachWarned, false);
+  assert.equal(outcome.fireThreshold, undefined);
+});
+
+test('an advancing resets_at is still an unambiguous rollover', () => {
+  const now = Date.now();
+  const prev: WindowState = {
+    firedThresholds: [75],
+    breachWarned: true,
+    lastResetsAt: now + 1000,
+    lastUtil: 80,
+  };
+  const outcome = evaluateWindow(prev, windowInput(3, now + 5 * 60 * 60 * 1000, now));
+  assert.deepEqual(outcome.state.firedThresholds, []);
+  assert.equal(outcome.state.breachWarned, false);
+});
+
+test('a drop that lands above the floor is a dip; one that lands below it is a rollover', () => {
+  const now = Date.now();
+  const prev: WindowState = {
+    firedThresholds: [75],
+    breachWarned: true,
+    lastResetsAt: now + 60 * 60 * 1000,
+    lastUtil: 85,
+  };
+  const dip = evaluateWindow(prev, windowInput(72, now + 60 * 60 * 1000, now));
+  assert.deepEqual(dip.state.firedThresholds, [75], '85 -> 72 is still one window');
+
+  const reset = evaluateWindow(prev, windowInput(8, now + 60 * 60 * 1000, now));
+  assert.deepEqual(reset.state.firedThresholds, [], '85 -> 8 is a rollover');
+});
+
+test('a resets_at appearing after a large drop counts as a rollover', () => {
+  const now = Date.now();
+  const prev: WindowState = { firedThresholds: [75], breachWarned: true, lastUtil: 92 };
+  const outcome = evaluateWindow(prev, windowInput(25, now + 4 * 60 * 60 * 1000, now));
+  assert.deepEqual(outcome.state.firedThresholds, []);
+  assert.equal(outcome.state.breachWarned, false);
+});
+
+test('fast-mode records reach the burn rate at the premium price', () => {
+  const now = Date.now();
+  const base = {
+    timestamp: now - 60_000,
+    model: 'claude-opus-5',
+    tokens: { ...EMPTY_TOKENS, input: 1_000_000 },
+  };
+  const standard = burnRate([base], now, 5 * 60_000);
+  const fast = burnRate([{ ...base, speed: 'fast' }], now, 5 * 60_000);
+  assert.equal(standard.windowCostUsd, 5);
+  assert.equal(fast.windowCostUsd, 10);
+});
+
+test('fast-mode turns reach the model advisor at the premium price', () => {
+  const now = Date.now();
+  const turns = (speed?: string) =>
+    Array.from({ length: 6 }, () => ({
+      timestamp: now - 60_000,
+      model: 'claude-opus-5',
+      tokens: { ...EMPTY_TOKENS, input: 1_000_000, output: 100 },
+      ...(speed ? { speed } : {}),
+    }));
+  const standard = modelAdvice(turns(), now, 5 * 60_000);
+  const fast = modelAdvice(turns('fast'), now, 5 * 60_000);
+  assert.ok(standard && fast);
+  assert.equal(Math.round(standard!.windowCostUsd), 30);
+  assert.equal(Math.round(fast!.windowCostUsd), 60);
 });

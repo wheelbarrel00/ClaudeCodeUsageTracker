@@ -21,6 +21,10 @@ export interface UsageRecord {
   session?: string;
   sessionTitle?: string;
   branch?: string;
+  // Subagent turn: real spend, so it counts in every total, but it is not "the current conversation".
+  isSidechain?: boolean;
+  // usage.speed — 'fast' bills at premium rates. Absent on models without fast mode.
+  speed?: string;
 }
 
 /** Aggregated usage plus an estimated cost (USD). */

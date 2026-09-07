@@ -58,7 +58,6 @@ const SEVEN_DAY = 'sevenDay';
 // stateless (period-anchored), so there is nothing to persist or warm up.
 export class PredictionController {
   private readonly states = new Map<string, WindowState>();
-  private advisedModel?: string;
   private advisedAt = 0;
 
   update(records: UsageRecord[], limits: PlanLimits | undefined, now = Date.now()): PredictionView {
@@ -86,11 +85,9 @@ export class PredictionController {
     if (!advice) {
       return;
     }
-    const sameSituation = advice.model === this.advisedModel;
-    if (sameSituation && now - this.advisedAt < ADVICE_COOLDOWN_MS) {
+    if (now - this.advisedAt < ADVICE_COOLDOWN_MS) {
       return;
     }
-    this.advisedModel = advice.model;
     this.advisedAt = now;
     notifyAdvice(advice, cfg.currency, cfg.decimals);
   }
@@ -132,7 +129,7 @@ export class PredictionController {
     let segment: string | undefined;
     let detail: string | undefined;
     if (outcome.annotation === 'projection' && outcome.projectedUtil !== undefined) {
-      ({ segment, detail } = describeProjection(outcome.projectedUtil));
+      ({ segment, detail } = describeProjection(outcome.projectedUtil, outcome.rawProjectedUtil));
     } else if (outcome.annotation === 'eta' && outcome.etaMs !== undefined) {
       const eta = formatEta(outcome.etaMs);
       segment = `· ${eta}`;

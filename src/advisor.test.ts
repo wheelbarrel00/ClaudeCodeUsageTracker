@@ -195,3 +195,14 @@ test('analyze ranks a dollar-quantified tip above the informational forecast', (
   assert.equal(insights[0].id, 'model-mix');
   assert.equal(insights[insights.length - 1].id, 'spend-forecast');
 });
+
+test('fast-mode turns are re-priced at the premium rate in the model-mix saving', () => {
+  const records = Array.from({ length: 6 }, () => ({
+    ...record({ input: 1_000_000, output: 100 }, 'claude-opus-4-8'),
+    speed: 'fast',
+  }));
+  const insight = byId(run({ records }), 'model-mix');
+  assert.ok(insight);
+  // Per turn: opus at fast rates $10.005 vs sonnet at standard $3.0015 = $7.0035; x6 = $42.021.
+  assert.ok(insight!.savingsUsd! > 42 && insight!.savingsUsd! < 42.03);
+});

@@ -4,6 +4,79 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.6.0] - 2026-09-06
+
+### Fixed
+- **The weekly limit no longer shows a reset that hasn't happened.** When a limits
+  reading was older than the window it described, the extension assumed the window
+  had rolled over and reported it as **0% used, with a fresh countdown** — visually
+  identical to a live reading. Since Claude Code stopped refreshing
+  `~/.claude/usage-cache.json`, that stale file could be *months* old and still be
+  presented as current. A window is now only reported empty when the reset and the
+  reading are both recent; otherwise it is hidden rather than guessed at.
+- **Context % no longer falls as your context grows.** The window size was inferred
+  from the token count itself, so a conversation at 190k tokens showed **95%** and
+  one message later, at 205k, showed **20%**. The window now comes from the model:
+  1M on Sonnet 4.6 / Opus 4.6 and later, 200K on Haiku and every earlier model.
+- **Context % now describes your conversation, not its subagents.** Subagent turns
+  carry the parent session's details and are usually the most recent entry, so the
+  headline jumped by tens of points every time a subagent ran and back again when it
+  finished. Their usage still counts everywhere costs are reported.
+- **The 5-hour pace meter no longer says "on pace" when you are burning far too fast.**
+  Early in a window the projection is deliberately damped so a thin slice cannot look
+  alarming — but the "on pace" verdict was being read off the damped number. Using 36%
+  of a 5-hour window in its first 30 minutes is a pace that exhausts it in under an
+  hour, and the status bar called that "on pace to use this window fully".
+- **Live limits can no longer show a different account's usage.** After signing out and
+  back in as another account, a cached access token kept being used — successfully, so
+  nothing ever corrected it — and the status bar could report the previous account's
+  limits for hours.
+- **Claude Fable 5.1 cache reads were billed at 4× the real rate** ($1.00 rather than
+  $0.25 per million), inherited from Claude Fable 5. Cache reads dominate token volume
+  in Claude Code sessions, so this noticeably overstated Fable 5.1 usage.
+- **Opus fast mode was priced at half its real cost.** Fast mode bills at premium rates
+  and is reported per message; that signal was being discarded.
+- **"Explain with AI" works again on current Claude models.** The token budget was small
+  enough that newer models, which reason before answering, could spend all of it before
+  producing any visible text — returning "The model returned no text." on a billed request.
+- **Warning popups no longer fire twice.** A momentary dip in a reported percentage could
+  be mistaken for the window resetting, re-arming every alert and immediately re-firing it.
+- **A window at 100% is never shown in green.** Clearing the warning-threshold list
+  silently disabled all colouring and every alert.
+- **The dashboard no longer rebuilds itself on every log write.** With the dashboard open
+  during an active session it recomputed everything up to several times a second, which
+  could make the whole editor feel sluggish.
+- **"Explain with AI" can no longer get stuck on "Analyzing your usage…"** after the
+  dashboard is closed and reopened mid-request.
+- **Live limits are shared between windows more reliably.** Publishing the shared reading
+  could silently fail when another window was reading it at that moment — on Windows,
+  often. Each window then fell back to making its own request, which is what the shared
+  reading exists to avoid. A rate-limit pause is now shared too, instead of every window
+  discovering it separately.
+- **The dashboard stays where you put it** instead of jumping into the active editor group.
+- **A log file locked mid-write no longer skips a refresh.**
+
+### Changed
+- **Your context % will read differently after this release.** On current models
+  (Sonnet 4.6 / Opus 4.6 and later) a conversation under 200k tokens now reads far
+  lower, because it is measured against the full 1M window. On Haiku and pre-4.6
+  models it is unchanged. The new figures are the correct ones.
+- The AI Advisor now defaults to **Claude Sonnet 5**, which is both cheaper and stronger
+  than the previous default. Set `advisor.ai.model` to an Opus id for deeper analysis.
+- The extension now runs in **Restricted Mode** windows. It only ever reads usage data
+  from your home directory and never executes anything from a workspace.
+- An AI answer cut short by the token limit now says so, instead of appearing complete.
+- If Anthropic rejects your stored API key, the extension now offers to update it rather
+  than repeating the same error.
+
+### Security
+- **Prompt samples are limited to the folders open in your window.** The opt-in
+  "include prompt text" setting collected from *every* Claude Code project on the
+  machine, so prompts from an unrelated repository could be sent under a consent dialog
+  that mentioned only "your recent prompts". Samples are now matched to the open
+  workspace, and none are sent when there is no folder open. The confirmation dialog
+  now names the workspace it is drawing from.
+
 ## [1.5.1] - 2026-07-19
 
 ### Fixed

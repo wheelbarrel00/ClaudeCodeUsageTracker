@@ -66,7 +66,7 @@ reset time has already passed is treated as rolled over (a fresh `0%`) with an
 utilization figures are already 0&ndash;100, so they're shown as-is; the green /
 yellow / red tint follows your own `warnThresholds` (an explicit warning from the
 server can raise it, never lower it). The context-window figure is the most recent request's
-prompt size (input + cache) over the model's window &mdash; 200K, or 1M when the
+prompt size (input + cache) over the model's window &mdash; 1M on current models, 200K on Haiku and pre-4.6 models, or 1M when the
 prompt or model marks the long-context tier.
 
 **Privacy.** The live fetch reads your OAuth token from

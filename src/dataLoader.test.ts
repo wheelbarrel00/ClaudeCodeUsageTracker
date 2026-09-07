@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { parseEntries, loadUsageRecords, summarizeByProject } from './dataLoader';
+import {
+  parseEntries,
+  loadUsageRecords,
+  summarizeByProject,
+  currentContext,
+  summarize,
+  costBreakdown,
+  summarizeBySession,
+} from './dataLoader';
 import { UsageRecord, EMPTY_TOKENS } from './types';
 
 function line(overrides: {
@@ -397,4 +405,104 @@ test('project grouping folds case per the platform filesystem', () => {
   } else {
     assert.equal(groups.length, 2); // case-sensitive FS: distinct projects
   }
+});
+
+// Subagent turns carry the parent's sessionId, cwd and branch, so after parsing they are
+// indistinguishable from the main thread — and they are usually the most recent record. The
+// headline ctx% jumped tens of points on every Task launch and back again when one finished.
+function ctxRecord(timestamp: number, cacheRead: number, isSidechain: boolean): UsageRecord {
+  return {
+    timestamp,
+    model: 'claude-opus-5',
+    tokens: { ...EMPTY_TOKENS, cacheRead },
+    isSidechain,
+  };
+}
+
+test('currentContext reports the main thread, ignoring more recent subagent turns', () => {
+  const now = Date.now();
+  const records = [
+    ctxRecord(now - 4000, 111_273, false),
+    ctxRecord(now - 3000, 110_645, true),
+    ctxRecord(now - 2000, 122_519, true),
+    ctxRecord(now - 1000, 78_072, true),
+  ];
+  const ctx = currentContext(records, now);
+  assert.equal(ctx?.tokens, 111_273);
+  assert.equal(ctx?.windowTokens, 1_000_000);
+});
+
+test('a conversation with no subagent turns is unaffected', () => {
+  const now = Date.now();
+  const ctx = currentContext([ctxRecord(now - 1000, 250_000, false)], now);
+  assert.equal(ctx?.tokens, 250_000);
+});
+
+test('subagent-only records leave the context readout empty rather than misreporting it', () => {
+  const now = Date.now();
+  assert.equal(currentContext([ctxRecord(now - 1000, 90_000, true)], now), undefined);
+});
+
+test('the sidechain flag survives parsing', () => {
+  const text = [
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-13T04:00:00.000Z',
+      requestId: 'req_side',
+      isSidechain: true,
+      message: { id: 'msg_side', model: 'claude-opus-5', usage: { input_tokens: 5, output_tokens: 5 } },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-13T04:00:01.000Z',
+      requestId: 'req_main',
+      message: { id: 'msg_main', model: 'claude-opus-5', usage: { input_tokens: 5, output_tokens: 5 } },
+    }),
+  ].join('\n');
+  const records = parseEntries(text).map((e) => e.record);
+  assert.equal(records[0].isSidechain, true);
+  assert.equal(records[1].isSidechain, false);
+});
+
+test('usage.speed is carried onto the record so fast mode can be priced', () => {
+  const mk = (speed?: string) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-09-01T04:00:00.000Z',
+      requestId: 'req_' + (speed ?? 'none'),
+      message: {
+        id: 'msg_' + (speed ?? 'none'),
+        model: 'claude-opus-5',
+        usage: { input_tokens: 10, output_tokens: 10, ...(speed ? { speed } : {}) },
+      },
+    });
+  const records = parseEntries([mk('fast'), mk('standard'), mk()].join('\n')).map((e) => e.record);
+  assert.equal(records[0].speed, 'fast');
+  assert.equal(records[1].speed, 'standard');
+  assert.equal(records[2].speed, undefined);
+});
+
+test('fast-mode records are priced at the premium rate through summarize and costBreakdown', () => {
+  const base: UsageRecord = {
+    timestamp: Date.now(),
+    model: 'claude-opus-5',
+    tokens: { ...EMPTY_TOKENS, input: 1_000_000, cacheRead: 10_000_000 },
+  };
+  assert.equal(summarize([base]).costUsd, 10);
+  assert.equal(summarize([{ ...base, speed: 'fast' }]).costUsd, 20);
+  assert.equal(costBreakdown([base]).cacheRead, 5);
+  assert.equal(costBreakdown([{ ...base, speed: 'fast' }]).cacheRead, 10);
+});
+
+test('peak context per session excludes subagent turns', () => {
+  const at = Date.now();
+  const mk = (cacheRead: number, isSidechain: boolean): UsageRecord => ({
+    timestamp: at,
+    model: 'claude-opus-5',
+    tokens: { ...EMPTY_TOKENS, cacheRead },
+    session: 's1',
+    isSidechain,
+  });
+  const [session] = summarizeBySession([mk(200_000, false), mk(900_000, true)]);
+  assert.equal(Math.round(session.peakContextPct), 20, 'the 900k subagent turn is not this session peak');
 });

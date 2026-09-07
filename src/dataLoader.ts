@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { UsageRecord, UsageSummary, EMPTY_TOKENS } from './types';
-import { estimateCost, pricingForModel, cacheWriteRaw } from './pricing';
+import { estimateCost, pricingForModel, cacheWriteRaw, contextWindowFor } from './pricing';
 import { claudeConfigDir } from './paths';
 
 const SYNTHETIC_MODEL = '<synthetic>';
@@ -134,6 +134,8 @@ function parseUsageEntry(entry: any): { key: string; record: UsageRecord } | nul
     cwd,
     session,
     branch,
+    isSidechain: entry.isSidechain === true,
+    speed: typeof usage.speed === 'string' ? intern(usage.speed) : undefined,
   };
   return { key, record };
 }
@@ -311,7 +313,15 @@ async function refreshFile(file: string, st: fs.Stats, cached: CachedFile | unde
     return cached;
   }
   try {
-    const canTail = cached !== undefined && st.size > cached.size && (await endsOnBoundary(handle, cached.parsedBytes));
+    // An unguarded rejection escapes the caller's Promise.all and drops the whole refresh tick.
+    let canTail = false;
+    if (cached !== undefined && st.size > cached.size) {
+      try {
+        canTail = await endsOnBoundary(handle, cached.parsedBytes);
+      } catch {
+        return cached;
+      }
+    }
     const tail = newParseState();
     let parsedBytes: number;
     try {
@@ -419,7 +429,7 @@ export function summarize(records: UsageRecord[]): UsageSummary {
     tokens.cacheWrite += record.tokens.cacheWrite;
     tokens.cacheWrite1h += record.tokens.cacheWrite1h;
     tokens.cacheRead += record.tokens.cacheRead;
-    costUsd += estimateCost(record.tokens, record.model);
+    costUsd += estimateCost(record.tokens, record.model, record.speed);
   }
   return { tokens, costUsd, messageCount: records.length };
 }
@@ -434,7 +444,7 @@ export interface CostParts {
 export function costBreakdown(records: UsageRecord[]): CostParts {
   const parts: CostParts = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
   for (const record of records) {
-    const p = pricingForModel(record.model);
+    const p = pricingForModel(record.model, record.speed);
     parts.input += (record.tokens.input * p.input) / 1_000_000;
     parts.output += (record.tokens.output * p.output) / 1_000_000;
     parts.cacheWrite += cacheWriteRaw(record.tokens, p) / 1_000_000;
@@ -526,14 +536,14 @@ export function summarizeMonthly(records: UsageRecord[], now = new Date()): Tren
   return result;
 }
 
-// Logs sometimes drop the [1m] marker; a prompt over the base window is itself proof of the 1M tier.
-function contextWindowFor(model: string, tokens: number): number {
-  return model.includes('[1m]') || tokens > 200_000 ? 1_000_000 : 200_000;
-}
-
+// Skips subagent turns: usually the most recent record, so the headline jumped on every Task
+// launch. Their tokens still count everywhere spend is reported.
 export function currentContext(records: UsageRecord[], now = Date.now()): ContextInfo | undefined {
   let latest: UsageRecord | undefined;
   for (const record of records) {
+    if (record.isSidechain) {
+      continue;
+    }
     const tokens = record.tokens.input + record.tokens.cacheRead + record.tokens.cacheWrite;
     if (tokens <= 0) {
       continue;
@@ -721,7 +731,7 @@ export function summarizeBySession(records: UsageRecord[]): SessionSummary[] {
         project = record.project;
       }
       const ctx = record.tokens.input + record.tokens.cacheRead + record.tokens.cacheWrite;
-      if (ctx > 0) {
+      if (ctx > 0 && !record.isSidechain) {
         peak = Math.max(peak, (ctx / contextWindowFor(record.model, ctx)) * 100);
       }
     }

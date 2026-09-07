@@ -18,8 +18,9 @@ const CONSOLE_KEYS_URL = 'https://console.anthropic.com/settings/keys';
 const CONSOLE_BILLING_URL = 'https://console.anthropic.com/settings/billing';
 const ANTHROPIC_VERSION = '2023-06-01';
 const REQUEST_TIMEOUT_MS = 60_000;
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
-const MAX_TOKENS = 1024;
+const DEFAULT_MODEL = 'claude-sonnet-5';
+// Thinking spends max_tokens before any visible text, so a small budget returns nothing.
+const MAX_TOKENS = 16000;
 
 export type AiResult = { ok: true; text: string; model: string } | { ok: false; error: string };
 
@@ -91,6 +92,22 @@ function apiErrorMessage(body: string): string | undefined {
   }
 }
 
+function workspaceCwds(): string[] {
+  return (vscode.workspace.workspaceFolders ?? [])
+    .filter((folder) => folder.uri.scheme === 'file')
+    .map((folder) => folder.uri.fsPath);
+}
+
+function workspaceLabel(): string {
+  const names = (vscode.workspace.workspaceFolders ?? [])
+    .filter((folder) => folder.uri.scheme === 'file')
+    .map((folder) => folder.name);
+  if (names.length === 0) {
+    return 'this workspace';
+  }
+  return names.length === 1 ? `the “${names[0]}” workspace` : `this workspace (${names.join(', ')})`;
+}
+
 export class AiAdvisor {
   constructor(private readonly secrets: vscode.SecretStorage) {}
 
@@ -143,9 +160,13 @@ export class AiAdvisor {
       }
     }
 
-    if (includePrompts) {
+    // Fails closed: no file-backed folder means nothing to scope to, so no samples.
+    const scopes = workspaceCwds();
+    const wantPrompts = includePrompts && scopes.length > 0;
+
+    if (wantPrompts) {
       const consent = await vscode.window.showWarningMessage(
-        'Include prompt text? A small, truncated sample of your recent Claude Code prompts will be sent to Anthropic so the advisor can coach on prompt quality. Turn off “advisor.ai.includePrompts” to send usage metadata only.',
+        `Include prompt text? A small, truncated sample of your recent Claude Code prompts from ${workspaceLabel()} will be sent to Anthropic so the advisor can coach on prompt quality. Prompts from your other projects are never included. Turn off “advisor.ai.includePrompts” to send usage metadata only.`,
         { modal: true },
         'Send with prompts'
       );
@@ -156,21 +177,39 @@ export class AiAdvisor {
 
     const subscription = hasSubscription(limits);
     const monthRecords = filterMonth(records);
-    const samples = includePrompts ? await collectPromptSamples() : [];
+    const samples = wantPrompts ? await collectPromptSamples(scopes) : [];
     const digest = buildDigest(monthRecords, limits, now, samples, subscription);
 
-    const { result, creditError } = await this.send(apiKey, model, includePrompts, digest, subscription);
+    // Keyed on what was collected, not the setting: no samples, no prompt-coaching instruction.
+    const sentPrompts = wantPrompts && samples.length > 0;
+    const { result, creditError, authError } = await this.send(apiKey, model, sentPrompts, digest, subscription);
+
+    // A rejected key stays in Secret Storage, so every later click repeated the same 401 with no
+    // way forward except finding the command in the palette.
+    if (!result.ok && authError) {
+      // Not awaited: runAi holds the webview's spinner until explain() returns.
+      const UPDATE = 'Update API key';
+      void vscode.window.showWarningMessage(
+        'Anthropic rejected the stored API key — it may have been rotated or revoked.',
+        UPDATE
+      ).then((pick) => {
+        if (pick === UPDATE) {
+          void this.setApiKey();
+        }
+      });
+    }
 
     // A credit-balance 400 means a valid key with no API credit — offer to open billing.
     if (!result.ok && creditError) {
       const BILLING = 'Open Billing';
-      const pick = await vscode.window.showWarningMessage(
+      void vscode.window.showWarningMessage(
         '“Explain with AI” needs a little pay-as-you-go Anthropic API credit — it is billed separately from your Claude Code / Pro / Max subscription.',
         BILLING
-      );
-      if (pick === BILLING) {
-        await vscode.env.openExternal(vscode.Uri.parse(CONSOLE_BILLING_URL));
-      }
+      ).then((pick) => {
+        if (pick === BILLING) {
+          void vscode.env.openExternal(vscode.Uri.parse(CONSOLE_BILLING_URL));
+        }
+      });
     }
 
     return result;
@@ -182,7 +221,7 @@ export class AiAdvisor {
     includePrompts: boolean,
     digest: string,
     subscription: boolean
-  ): Promise<{ result: AiResult; creditError: boolean }> {
+  ): Promise<{ result: AiResult; creditError: boolean; authError?: boolean }> {
     let result: HttpResult;
     try {
       result = await postJson(
@@ -203,6 +242,7 @@ export class AiAdvisor {
     if (result.status === 401) {
       return {
         creditError: false,
+        authError: true,
         result: { ok: false, error: `Anthropic rejected the API key (401)${detail ? `: ${detail}` : '.'} Set a valid key and try again.` },
       };
     }
@@ -233,6 +273,14 @@ export class AiAdvisor {
     } catch {
       return { creditError: false, result: { ok: false, error: 'Could not parse the Anthropic response.' } };
     }
+    // A refusal is a 200 with no content blocks.
+    if (parsed?.stop_reason === 'refusal') {
+      return {
+        creditError: false,
+        result: { ok: false, error: 'The model declined to answer this request. Try again without prompt samples.' },
+      };
+    }
+    const truncated = parsed?.stop_reason === 'max_tokens';
     const text = Array.isArray(parsed?.content)
       ? parsed.content
           .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
@@ -241,8 +289,14 @@ export class AiAdvisor {
           .trim()
       : '';
     if (!text) {
-      return { creditError: false, result: { ok: false, error: 'The model returned no text.' } };
+      const why = truncated
+        ? ` The whole ${MAX_TOKENS}-token budget went to reasoning — try a smaller model.`
+        : '';
+      return { creditError: false, result: { ok: false, error: `The model returned no text.${why}` } };
     }
-    return { creditError: false, result: { ok: true, text, model } };
+    const body = truncated
+      ? `${text}\n\nThis answer was cut off at the ${MAX_TOKENS}-token limit, so the list may be incomplete.`
+      : text;
+    return { creditError: false, result: { ok: true, text: body, model } };
   }
 }

@@ -33,6 +33,18 @@ export interface PlanLimits {
 
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
+// One full weekly period: past it every window has necessarily rolled over at least once, so
+// nothing in the payload can describe the present.
+const MAX_PAYLOAD_AGE_MS = SEVEN_DAY_MS;
+
+// Utilization is 0 only at the instant a window rolls over, so reporting a rolled-over
+// window as empty is honest solely as a bridge from that reset to the next fetch.
+const ROLLOVER_GRACE_MS = 15 * 60 * 1000;
+
+// A future timestamp is clock skew, not freshness: a negative age exceeds no limit and would
+// clear every gate below. Matches the skew tolerance in usageApi's shared-cache reader.
+const CLOCK_SKEW_MS = 60 * 1000;
+
 export type SeverityBand = 'normal' | 'warning' | 'error';
 
 // One severity->color rule for both the status bar and dashboard. Bands come from the user's warn
@@ -42,6 +54,10 @@ export function severityBand(window: LimitWindow, thresholds: number[]): Severit
     return 'error';
   }
   const shown = Math.round(window.utilization);
+  // Thresholds can be emptied entirely from settings; an exhausted window is never green.
+  if (shown >= 100) {
+    return 'error';
+  }
   let band: SeverityBand = 'normal';
   if (thresholds.length > 0) {
     if (shown >= thresholds[thresholds.length - 1]) {
@@ -73,15 +89,25 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
   } catch {
     return undefined;
   }
-  return mapUsageData(raw?.data, num(raw?.fetchedAt));
+  const fetchedAt = num(raw?.fetchedAt);
+  if (fetchedAt === undefined) {
+    return undefined;
+  }
+  return mapUsageData(raw?.data, fetchedAt);
 }
 
-// Maps the raw usage payload (the `data` object Claude Code writes to
-// usage-cache.json, which is also the body the live /api/oauth/usage endpoint
-// returns) into PlanLimits. Pure and I/O-free so both the cache reader and the
-// live fetcher share one parser.
-export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefined {
+// Maps the raw usage payload (the `data` object Claude Code writes to usage-cache.json, which is
+// also the body the live /api/oauth/usage endpoint returns) into PlanLimits. Pure and I/O-free so
+// both the cache reader and the live fetcher share one parser.
+export function mapUsageData(data: any, fetchedAt: number): PlanLimits | undefined {
   if (!data || typeof data !== 'object') {
+    return undefined;
+  }
+
+  const now = Date.now();
+  // NaN compares false against every bound, so reject it explicitly.
+  const age = now - fetchedAt;
+  if (!Number.isFinite(age) || age > MAX_PAYLOAD_AGE_MS || age < -CLOCK_SKEW_MS) {
     return undefined;
   }
 
@@ -100,9 +126,13 @@ export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefi
     }
   }
 
-  const now = Date.now();
-  const fiveHour = applyExpiry(windowFromLimit(byKind.get('session')) ?? windowFromTop(data.five_hour), now, 0);
-  const sevenDay = applyExpiry(windowFromLimit(byKind.get('weekly_all')) ?? windowFromTop(data.seven_day), now, SEVEN_DAY_MS);
+  const fiveHour = applyExpiry(windowFromLimit(byKind.get('session')) ?? windowFromTop(data.five_hour), now, 0, fetchedAt);
+  const sevenDay = applyExpiry(
+    windowFromLimit(byKind.get('weekly_all')) ?? windowFromTop(data.seven_day),
+    now,
+    SEVEN_DAY_MS,
+    fetchedAt
+  );
 
   const scoped: ScopedLimit[] = [];
   for (const entry of scopedRaw) {
@@ -118,15 +148,16 @@ export function mapUsageData(data: any, fetchedAt?: number): PlanLimits | undefi
         severity: severityOf(entry.severity),
       },
       now,
-      SEVEN_DAY_MS
+      SEVEN_DAY_MS,
+      fetchedAt
     );
     if (win) {
       scoped.push(win);
     }
   }
   if (scoped.length === 0) {
-    pushTopScoped(scoped, 'Opus', data.seven_day_opus, now);
-    pushTopScoped(scoped, 'Sonnet', data.seven_day_sonnet, now);
+    pushTopScoped(scoped, 'Opus', data.seven_day_opus, now, fetchedAt);
+    pushTopScoped(scoped, 'Sonnet', data.seven_day_sonnet, now, fetchedAt);
   }
 
   const extraUsage = parseExtraUsage(data.extra_usage);
@@ -172,21 +203,32 @@ export function formatExtraSpend(extra: ExtraUsage): string {
   return `${money(extra.usedCredits)}${cap}`;
 }
 
-// A window whose reset time has passed rolled over since the data was fetched,
-// so the old utilization no longer applies: report a fresh, empty 0% window.
-// rollMs > 0 projects the next weekly boundary (best-effort, assuming a fixed
-// 7-day cadence); rollMs = 0 clears the reset for the usage-anchored 5-hour
-// window, whose next reset is unknown until it is used again.
-function applyExpiry<T extends LimitWindow>(window: T | undefined, now: number, rollMs: number): T | undefined {
+// A window whose reset time has passed rolled over since the data was fetched, so the old
+// utilization no longer applies. "Empty" holds only while both the rollover and the fetch are
+// recent (see ROLLOVER_GRACE_MS); beyond that it is dropped rather than guessed at 0%.
+// rollMs > 0 projects the weekly boundary; rollMs = 0 clears the 5-hour window's unknown reset.
+function applyExpiry<T extends LimitWindow>(
+  window: T | undefined,
+  now: number,
+  rollMs: number,
+  fetchedAt: number
+): T | undefined {
   if (!window || window.resetsAt === undefined || window.resetsAt > now) {
     return window;
   }
-  let resetsAt: number | undefined;
-  if (rollMs > 0) {
-    const periods = Math.floor((now - window.resetsAt) / rollMs) + 1;
-    resetsAt = window.resetsAt + periods * rollMs;
+  const lastBoundary =
+    rollMs > 0
+      ? window.resetsAt + Math.floor((now - window.resetsAt) / rollMs) * rollMs
+      : window.resetsAt;
+  if (now - Math.max(fetchedAt, lastBoundary) > ROLLOVER_GRACE_MS) {
+    return undefined;
   }
-  return { ...window, utilization: 0, severity: 'normal', resetsAt };
+  return {
+    ...window,
+    utilization: 0,
+    severity: 'normal',
+    resetsAt: rollMs > 0 ? lastBoundary + rollMs : undefined,
+  };
 }
 
 export function formatAge(fetchedAt?: number, now = Date.now()): string {
@@ -259,10 +301,10 @@ function windowFromTop(raw: any): LimitWindow | undefined {
   };
 }
 
-function pushTopScoped(out: ScopedLimit[], label: string, raw: any, now: number): void {
+function pushTopScoped(out: ScopedLimit[], label: string, raw: any, now: number, fetchedAt: number): void {
   const win = windowFromTop(raw);
   if (win) {
-    const scoped = applyExpiry<ScopedLimit>({ label, ...win }, now, SEVEN_DAY_MS);
+    const scoped = applyExpiry<ScopedLimit>({ label, ...win }, now, SEVEN_DAY_MS, fetchedAt);
     if (scoped) {
       out.push(scoped);
     }

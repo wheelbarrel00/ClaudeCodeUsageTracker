@@ -66,7 +66,8 @@ function modelMixInsight(records: UsageRecord[], money: Money, subscription: boo
     }
     const a = agg.get(r.model) ?? { count: 0, currentCost: 0, cheaperCost: 0, output: 0 };
     a.count += 1;
-    a.currentCost += estimateCost(r.tokens, r.model);
+    a.currentCost += estimateCost(r.tokens, r.model, r.speed);
+    // Costed at standard speed on purpose: losing the fast-mode premium is part of the saving.
     a.cheaperCost += estimateCost(r.tokens, cheaper);
     a.output += r.tokens.output;
     agg.set(r.model, a);
@@ -172,7 +173,7 @@ function forecastInsight(
 ): Insight | undefined {
   let total = 0;
   for (const r of records) {
-    total += estimateCost(r.tokens, r.model);
+    total += estimateCost(r.tokens, r.model, r.speed);
   }
   if (total < FORECAST_MIN_SPEND) {
     return undefined;

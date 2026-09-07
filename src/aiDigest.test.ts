@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { UsageRecord, EMPTY_TOKENS } from './types';
-import { buildDigest, systemPrompt, extractUserPrompt } from './aiDigest';
+import * as path from 'path';
+import { buildDigest, systemPrompt, extractUserPrompt, collectPromptSamples } from './aiDigest';
 
 // Mid-June "now" so the digest's day-of-month text is deterministic.
 const JUNE_15 = new Date(2026, 5, 15, 12, 0, 0).getTime();
@@ -91,4 +92,42 @@ test('extractUserPrompt truncates very long prompts', () => {
   const out = extractUserPrompt(line)!;
   assert.ok(out.length <= 280);
   assert.ok(out.endsWith('…'));
+});
+
+// ~/.claude/projects holds every project on the machine. Unscoped, "Explain with AI" shipped
+// whichever repo happened to be busiest — under a consent dialog that named none of them.
+// Built with the running platform's own separator: path.relative is path.win32 only on Windows,
+// so hardcoded backslashes made these pass vacuously (or fail) everywhere else.
+const TRACKER_CWD = path.join(path.sep, 'users', 'dev', 'Tracker');
+const OTHER_CWD = path.join(path.sep, 'users', 'dev', 'ClientRepo');
+const SIBLING_CWD = path.join(path.sep, 'users', 'dev', 'TrackerExtra');
+const NESTED_CWD = path.join(TRACKER_CWD, 'src');
+
+function promptLine(cwd: string): string {
+  return JSON.stringify({ type: 'user', cwd, message: { content: 'ship the release' } });
+}
+
+test('prompt samples are limited to the open workspace', () => {
+  assert.equal(extractUserPrompt(promptLine(TRACKER_CWD), [TRACKER_CWD]), 'ship the release');
+  assert.equal(extractUserPrompt(promptLine(NESTED_CWD), [TRACKER_CWD]), 'ship the release');
+  assert.equal(extractUserPrompt(promptLine(OTHER_CWD), [TRACKER_CWD]), undefined);
+});
+
+test('with no workspace to scope to, nothing is collected at all', async () => {
+  assert.deepEqual(await collectPromptSamples([]), []);
+});
+
+test('a sibling directory that merely shares a name prefix is outside the workspace', () => {
+  assert.equal(extractUserPrompt(promptLine(SIBLING_CWD), [TRACKER_CWD]), undefined);
+});
+
+test('an entry with no cwd cannot be attributed to the workspace, so it is dropped', () => {
+  const line = JSON.stringify({ type: 'user', message: { content: 'ship the release' } });
+  assert.equal(extractUserPrompt(line, [TRACKER_CWD]), undefined);
+  assert.equal(extractUserPrompt(line), 'ship the release');
+});
+
+test('the prompt-coaching instruction is only added when prompts were actually collected', () => {
+  assert.match(systemPrompt(true, false), /recent user prompts are included/i);
+  assert.doesNotMatch(systemPrompt(false, false), /recent user prompts are included/i);
 });
