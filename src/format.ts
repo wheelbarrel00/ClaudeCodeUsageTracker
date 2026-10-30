@@ -1,8 +1,6 @@
-// Memoized (a dashboard payload formats hundreds of values); a failed construct caches null too.
 const formatters = new Map<string, Intl.NumberFormat | null>();
 
 export function formatCurrency(value: number, currency: string, decimals: number): string {
-  // Clamp: a hand-edited negative decimalPlaces makes both Intl.NumberFormat and toFixed throw.
   const d = Math.min(20, Math.max(0, Math.round(decimals)));
   const key = `${currency}|${d}`;
   let format = formatters.get(key);

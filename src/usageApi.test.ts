@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSharedCache, parseBackoff, credentialId } from './usageApi';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as credentials from './credentials';
+import { parseSharedCache, parseBackoff, fetchLiveLimits } from './usageApi';
 
 const NOW = 1_000_000_000;
 const ok = (at: number) => JSON.stringify({ v: 1, data: { limits: [] }, at });
@@ -51,13 +55,17 @@ test('parseBackoff accepts just under the cap and rejects just over it', () => {
   assert.equal(parseBackoff(JSON.stringify({ v: 1, until: now + 31 * 60_000 }), now), 0);
 });
 
-test('credentialId changes with the refresh token and is stable for the same one', () => {
-  const base = { accessToken: 'a1', refreshToken: 'r1', scopes: [], expiresAt: undefined };
-  assert.equal(credentialId(base), credentialId({ ...base, accessToken: 'different' }));
-  assert.notEqual(credentialId(base), credentialId({ ...base, refreshToken: 'r2' }));
+test('the live fetch never spends Claude Code’s refresh token', () => {
+  const compiled = fs.readFileSync(path.join(__dirname, 'usageApi.js'), 'utf8');
+  assert.doesNotMatch(compiled, /refresh_token|oauth\/token|refreshToken/);
 });
 
-test('credentialId falls back to the access token when there is no refresh token', () => {
-  const a = { accessToken: 'a1', refreshToken: '', scopes: [], expiresAt: undefined };
-  assert.notEqual(credentialId(a), credentialId({ ...a, accessToken: 'a2' }));
+test('an expired token is re-read once per interval, not on every refresh', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccut-usage-'));
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const read = t.mock.method(credentials, 'readOAuthAsync', async () => ({ accessToken: 'stale', expiresAt: 1 }));
+  assert.equal(await fetchLiveLimits(60_000), undefined);
+  assert.equal(await fetchLiveLimits(60_000), undefined);
+  assert.equal(read.mock.callCount(), 1);
 });

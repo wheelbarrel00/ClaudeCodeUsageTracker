@@ -8,6 +8,7 @@ import {
   keychainService,
   keychainAccount,
   parseCredentials,
+  isExpired,
   readOAuth,
   readOAuthAsync,
   OAuthCredentials,
@@ -83,7 +84,7 @@ function hash8(dir: string): string {
   return crypto.createHash('sha256').update(dir.normalize('NFC')).digest('hex').slice(0, 8);
 }
 
-// credentials.ts reads os.userInfo via a live TS-namespace getter, so patch the underlying module, not the import.
+// credentials.ts sees os through live getters, so patch the os module itself, not this import.
 function withUserInfo(impl: () => { username: string }, fn: () => void): void {
   const osModule = require('os');
   const orig = osModule.userInfo;
@@ -157,15 +158,20 @@ test('keychainAccount returns the default when USER is unset and os.userInfo thr
   );
 });
 
-test('parseCredentials extracts the oauth fields and drops non-string scopes', () => {
+test('parseCredentials extracts the oauth fields and never keeps the refresh token', () => {
   const creds = parseCredentials(VALID);
   assert.deepEqual(creds, {
     accessToken: 'tok',
-    refreshToken: 'ref',
     expiresAt: 123,
-    scopes: ['user:inference', 'org:read'],
     subscriptionType: 'max',
   });
+  assert.doesNotMatch(JSON.stringify(creds), /ref/);
+});
+
+test('isExpired is true only once the expiry has passed, and never for an unknown expiry', () => {
+  assert.equal(isExpired(1_000, 999), false);
+  assert.equal(isExpired(1_000, 1_000), true);
+  assert.equal(isExpired(undefined, Number.MAX_SAFE_INTEGER), false);
 });
 
 test('parseCredentials tolerates the trailing newline of `security -w` output', () => {
@@ -279,13 +285,13 @@ test('a slow Keychain miss does not clobber creds a concurrent file read cached'
   try {
     await withEnvAsync({ CLAUDE_CONFIG_DIR: dir, CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined }, () =>
       withPlatform('darwin', async () => {
-        const pending = readOAuthAsync(); // spawns the (still-pending) Keychain read
+        const pending = readOAuthAsync();
         fs.writeFileSync(path.join(dir, '.credentials.json'), VALID);
-        const fromFile = await readOAuthAsync(); // reads the freshly written file
+        const fromFile = await readOAuthAsync();
         assert.equal(fromFile?.accessToken, 'tok');
-        release(undefined); // the earlier Keychain read now resolves empty
+        release(undefined);
         await pending;
-        assert.equal(readOAuth()?.accessToken, 'tok'); // the fresh creds survived
+        assert.equal(readOAuth()?.accessToken, 'tok');
       })
     );
   } finally {

@@ -1,6 +1,3 @@
-// Pure, VS Code-free usage advisor (so it stays unit-testable). A `money` formatter
-// is injected so insights read self-contained without the module touching VS Code or locale.
-
 import { UsageRecord } from './types';
 import { estimateCost, familyOf, familyLabel, cheaperTier } from './pricing';
 import type { SessionSummary } from './dataLoader';
@@ -8,42 +5,37 @@ import type { SessionSummary } from './dataLoader';
 export type InsightSeverity = 'info' | 'tip' | 'warning';
 
 export interface Insight {
-  id: string; // 'model-mix' | 'cache-efficiency' | 'context-bloat' | 'spend-forecast'
+  id: string;
   severity: InsightSeverity;
   title: string;
   detail: string;
   action?: string;
-  savingsUsd?: number; // estimated saving; drives ranking + the badge
+  savingsUsd?: number;
   evidence?: string;
 }
 
 export interface AdvisorInput {
-  records: UsageRecord[]; // dashboard passes the current month
-  sessions: SessionSummary[]; // sessions over the same period
+  records: UsageRecord[];
+  sessions: SessionSummary[];
   now: number;
-  // On a subscription the dollar figures are estimated API-equivalent cost (a usage
-  // gauge), not a bill — the priced insights reframe toward session limits when set.
   subscription?: boolean;
 }
 
 export type Money = (usd: number) => string;
 
-// A turn this short is routine enough that a cheaper tier could likely serve it.
 const MODEL_MAX_OUTPUT = 300;
 const MODEL_MIN_TURNS = 5;
 const MODEL_MIN_SAVINGS = 1.0;
 
-// Judged per session so many short, fresh sessions (low reuse by nature, not waste) don't trip it.
 const CACHE_MIN_MESSAGES = 10;
 const CACHE_MIN_SESSION_TOKENS = 2_000_000;
 const CACHE_LOW_HIT = 0.4;
 const CACHE_MIN_SESSIONS = 2;
 
-// A couple of sessions regularly running hot is a habit worth flagging, not a one-off.
 const HOT_CONTEXT_PCT = 80;
 const HOT_MIN_SESSIONS = 2;
 
-const FORECAST_MIN_DAY = 2; // don't extrapolate a month from a single day
+const FORECAST_MIN_DAY = 2;
 const FORECAST_MIN_SPEND = 1.0;
 
 const SEVERITY_RANK: Record<InsightSeverity, number> = { warning: 0, tip: 1, info: 2 };
@@ -55,8 +47,6 @@ interface ModelAgg {
   output: number;
 }
 
-// Re-prices short-output turns one tier down (context included, so a big cached context on a
-// short answer counts) and reports the single model with the largest realisable saving.
 function modelMixInsight(records: UsageRecord[], money: Money, subscription: boolean): Insight | undefined {
   const agg = new Map<string, ModelAgg>();
   for (const r of records) {
@@ -107,8 +97,6 @@ function modelMixInsight(records: UsageRecord[], money: Money, subscription: boo
   };
 }
 
-// Qualitative (no savingsUsd) since the achievable improvement depends on workflow, so it
-// ranks below the priced tips.
 function sessionHitRate(s: SessionSummary): number {
   const t = s.summary.tokens;
   const denom = t.input + t.cacheWrite + t.cacheRead;
@@ -162,9 +150,6 @@ function contextInsight(sessions: SessionSummary[]): Insight | undefined {
   };
 }
 
-// Linear month-end projection from the spend so far. Framed as "at your current
-// pace" and withheld on day 1, where one day extrapolates wildly. On a subscription
-// the figure is API-equivalent usage value, not a bill — reframed accordingly.
 function forecastInsight(
   records: UsageRecord[],
   now: number,
@@ -209,13 +194,11 @@ function forecastInsight(
 }
 
 export interface SavingsBadge {
-  text: string; // e.g. "~$12.00" or "≈ $12.00"
+  text: string;
   title: string;
-  gauge: boolean; // true on a subscription: a usage gauge, not a cash saving (render muted, not green)
+  gauge: boolean;
 }
 
-// On a subscription the figure is estimated API-equivalent usage, not money off a flat-fee
-// bill, so it's badged as a neutral gauge (not green) to match the reframed copy.
 export function savingsBadge(insight: Insight, money: Money, subscription = false): SavingsBadge | undefined {
   if (!insight.savingsUsd || insight.savingsUsd <= 0) {
     return undefined;
@@ -231,7 +214,6 @@ export function savingsBadge(insight: Insight, money: Money, subscription = fals
   return { text: `~${amount}`, title: 'Estimated saving over this period', gauge: false };
 }
 
-// Ranked: larger dollar saving first, then severity (warning, tip, info).
 export function analyze(input: AdvisorInput, money: Money): Insight[] {
   const subscription = input.subscription ?? false;
   const insights = [

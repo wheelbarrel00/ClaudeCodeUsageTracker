@@ -4,7 +4,6 @@ import { UsageRecord, EMPTY_TOKENS } from './types';
 import * as path from 'path';
 import { buildDigest, systemPrompt, extractUserPrompt, collectPromptSamples } from './aiDigest';
 
-// Mid-June "now" so the digest's day-of-month text is deterministic.
 const JUNE_15 = new Date(2026, 5, 15, 12, 0, 0).getTime();
 
 function record(tokens: Partial<typeof EMPTY_TOKENS>, model = 'claude-opus-4-8', timestamp = JUNE_15): UsageRecord {
@@ -94,10 +93,7 @@ test('extractUserPrompt truncates very long prompts', () => {
   assert.ok(out.endsWith('…'));
 });
 
-// ~/.claude/projects holds every project on the machine. Unscoped, "Explain with AI" shipped
-// whichever repo happened to be busiest — under a consent dialog that named none of them.
-// Built with the running platform's own separator: path.relative is path.win32 only on Windows,
-// so hardcoded backslashes made these pass vacuously (or fail) everywhere else.
+// Built with the platform separator: hardcoded backslashes passed vacuously off Windows.
 const TRACKER_CWD = path.join(path.sep, 'users', 'dev', 'Tracker');
 const OTHER_CWD = path.join(path.sep, 'users', 'dev', 'ClientRepo');
 const SIBLING_CWD = path.join(path.sep, 'users', 'dev', 'TrackerExtra');

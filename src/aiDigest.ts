@@ -1,8 +1,6 @@
-// vscode/network/secret-free so it can be unit-tested directly; network + secrets live in aiAdvisor.ts.
-
 import * as fs from 'fs';
-import * as path from 'path';
 import { UsageRecord } from './types';
+import { isUnderAny } from './paths';
 import type { PlanLimits } from './limitsReader';
 import {
   claudeLogRoot,
@@ -14,8 +12,6 @@ import {
 import { analyze } from './advisor';
 
 const SAMPLE_MAX_SESSIONS = 5;
-// Scoping applied after taking the newest few machine-wide collected nothing: those are usually
-// subagent transcripts (no user prompts) or other projects.
 const SAMPLE_SCAN_LIMIT = 40;
 const SAMPLE_PER_SESSION = 3;
 const SAMPLE_MAX_TOTAL = 12;
@@ -25,7 +21,6 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-// `monthRecords` is pre-scoped by the caller; no prompt text is sent unless the caller passes opt-in samples.
 export function buildDigest(
   monthRecords: UsageRecord[],
   limits: PlanLimits | undefined,
@@ -117,7 +112,7 @@ export function systemPrompt(includePrompts: boolean, subscription = false): str
   return base + billing + prompts;
 }
 
-// Skips non-typed prompts: tool results, sidechains, and command/system wrappers (which start with '<').
+// Skips tool results, sidechains, and command/system wrappers (which start with '<').
 export function extractUserPrompt(line: string, allowedCwds: string[] = []): string | undefined {
   let raw: any;
   try {
@@ -154,17 +149,6 @@ export function extractUserPrompt(line: string, allowedCwds: string[] = []): str
   return clean.length > SAMPLE_MAX_LEN ? `${clean.slice(0, SAMPLE_MAX_LEN - 1)}…` : clean;
 }
 
-function isUnderAny(cwd: unknown, allowedCwds: string[]): boolean {
-  if (typeof cwd !== 'string' || !cwd) {
-    return false;
-  }
-  // path.relative, not startsWith: settles separators, Windows case, and "…TrackerExtra" vs "…Tracker".
-  return allowedCwds.some((root) => {
-    const rel = path.relative(root, cwd);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-  });
-}
-
 async function recentJsonlFiles(root: string): Promise<string[]> {
   const files = (await findJsonlFiles(root)) ?? [];
   const stamped = await Promise.all(
@@ -182,8 +166,6 @@ async function recentJsonlFiles(root: string): Promise<string[]> {
     .map((x) => x.file);
 }
 
-// Only called after the user has opted in and confirmed. allowedCwds scopes the sample to the
-// open workspace; ~/.claude/projects holds every project on the machine.
 export async function collectPromptSamples(allowedCwds: string[]): Promise<string[]> {
   // Fails closed: no scope means no way to keep another project's prompts out.
   if (allowedCwds.length === 0) {

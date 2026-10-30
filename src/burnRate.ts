@@ -1,16 +1,8 @@
-// Prediction math for the predictive-alerts feature. Pure and VS Code-free so it
-// can be unit-tested in isolation: the token/cost burn rate from usage records, and
-// the time-to-limit ETA / breach / threshold logic from each plan-limit window's
-// utilization. The ETA is anchored to the window's OWN period (5h / 7d), not a
-// short rolling slope, so a 7-day window is judged over days rather than minutes.
-
 import { UsageRecord, TokenCounts, totalTokens } from './types';
 import { estimateCost, cheaperTier } from './pricing';
 
 export interface BurnRate {
   tokensPerMin: number;
-  // Cache reads re-count the whole prefix every turn, so on a long session they are ~95% of
-  // tokensPerMin while pricing at 0.1x input. Split out so a headline can exclude them.
   newTokensPerMin: number;
   cacheReadPerMin: number;
   costPerMin: number;
@@ -24,9 +16,6 @@ function newTokens(t: TokenCounts): number {
   return t.input + t.output + t.cacheWrite;
 }
 
-// Average token/cost burn over the trailing window. Records outside
-// (now - windowMs, now] are ignored; the denominator is the full window, so the
-// rate decays to zero as activity stops rather than spiking on a lone old burst.
 export function burnRate(records: UsageRecord[], now: number, windowMs: number): BurnRate {
   const start = now - windowMs;
   let windowTokens = 0;
@@ -56,48 +45,26 @@ export function burnRate(records: UsageRecord[], now: number, windowMs: number):
   };
 }
 
-// A utilization drop larger than this (percentage points) is read as the window having
-// reset/rolled over rather than measurement jitter.
 const RESET_DROP_PTS = 5;
 
-// A rollover must also land near empty: nothing consumes most of a window between two refreshes,
-// so an 8-point drop (82% -> 74%) is a dip, not a reset.
 const RESET_FLOOR_PCT = 10;
 
-// The fixed length of each Claude limit window, used to anchor the average-rate
-// ETA (windowStart = resetsAt - period). The session (5-hour) and weekly (7-day)
-// windows are fixed-period and reset at resets_at.
 export const FIVE_HOUR_PERIOD_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 
-// The pace meter appears from here. Below it the window is too thin to say anything:
-// `util / elapsed` amplifies one tick by 1/elapsed, so at the very start a stray point
-// extrapolates to nonsense.
 const PROJECTION_MIN_ELAPSED_FRACTION = 0.1;
 
-// Confidence in the raw extrapolation reaches full here. Before it, the meter is shrunk
-// toward the current utilization (see projectedUtilization) so a thin early slice can't
-// read as an alarming number; the breach ETA stays gated to this mark so a popup never
-// fires off a damped early reading.
 const CONFIDENCE_FULL_FRACTION = 0.5;
 
-// Within this many points of 100 a single integer tick of the API's utilization swings the
-// projection across the line, so a bare number there is noise. Report "on pace" instead.
 export const ON_PACE_BAND_PTS = 10;
 
-// Milliseconds until utilization reaches 100%, extrapolating the AVERAGE consumption
-// rate over the window so far — rate = utilization / elapsed, where the window
-// started at (resetsAt - periodMs). This judges each window on its own timescale
-// (a 7-day window over days, a 5-hour window over hours), so a single percentage
-// tick can't manufacture an absurd ETA the way a short rolling slope did. Undefined
-// when the window hasn't run long enough to project, is already full, or idle.
 export function etaFromAverageRate(
   utilization: number,
   resetsAt: number | undefined,
   periodMs: number,
   now: number
 ): number | undefined {
-  // NaN passes both bounds below (every comparison is false), so reject it explicitly.
+  // NaN slips past every comparison below.
   const shown = Math.round(utilization);
   if (
     resetsAt === undefined ||
@@ -113,12 +80,11 @@ export function etaFromAverageRate(
   if (elapsed < CONFIDENCE_FULL_FRACTION * periodMs) {
     return undefined;
   }
-  const ratePerMs = utilization / elapsed; // percent per ms
+  const ratePerMs = utilization / elapsed;
   return (100 - utilization) / ratePerMs;
 }
 
-// Two readings of one pace: damped is what the meter shows, raw is what a verdict is judged on.
-// Damping may only soften an alarming number, never justify reassurance.
+// The meter shows damped; verdicts use raw, so damping never turns an alarm into reassurance.
 function projections(
   utilization: number,
   resetsAt: number | undefined,
@@ -154,8 +120,6 @@ export function projectedUtilization(
   return projections(utilization, resetsAt, periodMs, now)?.damped;
 }
 
-// True when the projected time-to-limit lands before the window's own reset, i.e.
-// the user is on track to be cut off mid-window.
 export function predictsBreachBeforeReset(
   etaMs: number | undefined,
   resetsAt: number | undefined,
@@ -171,9 +135,7 @@ export function predictsBreachBeforeReset(
   return etaMs < timeToReset;
 }
 
-// The configured warning thresholds the current utilization has reached, ascending.
-// Compares the rounded (status-bar-displayed) value so a shown "10%" matches a 10%
-// threshold, rather than the raw underlying number disagreeing with the display.
+// Rounded like the status bar, so a shown "10%" trips a 10% threshold.
 export function crossedThresholds(utilization: number, thresholds: number[]): number[] {
   const shown = Math.round(utilization);
   return thresholds
@@ -181,7 +143,6 @@ export function crossedThresholds(utilization: number, thresholds: number[]): nu
     .sort((a, b) => a - b);
 }
 
-// rawUtil decides the verdict; projectedUtil supplies the number.
 export function describeProjection(
   projectedUtil: number,
   rawUtil = projectedUtil
@@ -207,10 +168,6 @@ export function formatEta(ms: number): string {
   return hours ? `~${days}d${hours}h` : `~${days}d`;
 }
 
-// Per-window state carried across refreshes by the controller: just the alert
-// debounce and enough to detect a rollover. The ETA itself is stateless (derived
-// from the window's current utilization, reset time, and period), so it is correct
-// instantly on reload — no sample history to warm up.
 export interface WindowState {
   firedThresholds: number[];
   breachWarned: boolean;
@@ -218,34 +175,26 @@ export interface WindowState {
   lastUtil?: number;
 }
 
-// How a window's forecast is presented in the status bar:
-//  'projection' — always-on pace meter: the projected end-of-window % (used for 5h).
-//  'risk'       — a time-to-limit ETA, shown only when genuinely on track to breach
-//                 before reset and you're actively burning (used for the weekly).
-//  'off'        — show nothing, and suppress that window's breach popup.
 export type EtaMode = 'projection' | 'risk' | 'off';
 
 export interface WindowInput {
   utilization: number;
   resetsAt?: number;
-  periodMs: number; // the window's full length (5h / 7d), anchoring the ETA
+  periodMs: number;
   now: number;
   thresholds: number[];
   predictBreach: boolean;
   etaMode: EtaMode;
-  // Whether usage has been recorded in the recent trailing window. The average-rate
-  // ETA can't tell whether you're *still* burning; this does, so an idle window that
-  // front-loaded its usage can't keep advertising "you'll hit it at this rate".
   recentlyActive: boolean;
 }
 
 export interface WindowOutcome {
   state: WindowState;
-  etaMs?: number; // time-to-limit (for the breach message and the 'risk' annotation)
-  projectedUtil?: number; // damped projected end-of-window % — the annotation's number
-  rawProjectedUtil?: number; // undamped projection — decides the on-pace verdict
-  annotation: 'projection' | 'eta' | 'none'; // what, if anything, to show by the %
-  fireThreshold?: number; // a threshold to notify on this tick, else undefined
+  etaMs?: number;
+  projectedUtil?: number;
+  rawProjectedUtil?: number;
+  annotation: 'projection' | 'eta' | 'none';
+  fireThreshold?: number;
   fireBreach: boolean;
 }
 
@@ -253,16 +202,12 @@ export function emptyWindowState(): WindowState {
   return { firedThresholds: [], breachWarned: false };
 }
 
-// Folds one fresh limit reading into the prior window state: recomputes the ETA
-// from the window's average rate and decides which alerts — if any — should fire.
-// Each threshold/breach fires once per window; the debounce lives in memory per
-// window (re-armed on reload). A reset (rising resetsAt or a large utilization
-// drop) re-arms everything.
 export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOutcome {
   const { utilization, resetsAt, periodMs, now, thresholds, predictBreach, etaMode, recentlyActive } = input;
 
+  // resets_at jitters sub-second between fetches; a real rollover moves it about a full period.
   const resetMoved =
-    prev.lastResetsAt !== undefined && resetsAt !== undefined && resetsAt > prev.lastResetsAt;
+    prev.lastResetsAt !== undefined && resetsAt !== undefined && resetsAt - prev.lastResetsAt > periodMs / 2;
   // The 5-hour window clears its resets_at right after rolling over (applyExpiry).
   const resetCleared =
     prev.lastResetsAt !== undefined &&
@@ -272,7 +217,6 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
     prev.lastUtil !== undefined &&
     utilization < prev.lastUtil - RESET_DROP_PTS &&
     utilization <= RESET_FLOOR_PCT;
-  // A window that had no resets_at and now has one has started a new period.
   const resetAppeared =
     prev.lastResetsAt === undefined &&
     resetsAt !== undefined &&
@@ -292,17 +236,12 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
   const fireThreshold = newly.length ? Math.max(...newly) : undefined;
   firedThresholds = Array.from(new Set([...firedThresholds, ...crossed])).sort((a, b) => a - b);
 
-  // Clearing the dead-band keeps the breach popup from contradicting a meter that reads
-  // "on pace". The ETA behind atRisk is gated to the half-mark, so a damped early reading
-  // can't trip it.
+  // Past the on-pace band, so a breach popup never contradicts an "on pace" meter.
   const atRisk =
     predictsBreachBeforeReset(etaMs, resetsAt, now) &&
     projectedUtil !== undefined &&
     projectedUtil > 100 + ON_PACE_BAND_PTS;
 
-  // The pace meter needs only utilization + the wall clock, so it shows whenever a sane
-  // projection exists (even idle, self-correcting downward). The weekly 'risk' ETA and breach
-  // popups still require recent activity — an average rate can't tell if you're still burning.
   let annotation: 'projection' | 'eta' | 'none' = 'none';
   if (etaMode === 'projection' && projectedUtil !== undefined) {
     annotation = 'projection';
@@ -326,7 +265,6 @@ export function evaluateWindow(prev: WindowState, input: WindowInput): WindowOut
   };
 }
 
-/** Clean a user-supplied threshold list: drop non-numbers / out-of-range, dedup, sort. */
 export function sanitizeThresholds(raw: unknown): number[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -340,9 +278,9 @@ export function sanitizeThresholds(raw: unknown): number[] {
 export interface ModelAdvice {
   model: string;
   cheaperLabel: string;
-  windowCostUsd: number; // total spend in the window
-  modelCostUsd: number; // spend on the flagged model
-  share: number; // flagged model's share of window spend (0-1)
+  windowCostUsd: number;
+  modelCostUsd: number;
+  share: number;
   avgOutputTokens: number;
   messageCount: number;
   windowMs: number;
@@ -368,10 +306,6 @@ interface ModelAgg {
   count: number;
 }
 
-// Flags when a window's spend is dominated by an expensive model that is mostly
-// producing short replies — i.e. routine turns that a cheaper tier could serve.
-// Returns undefined unless every guard (min spend, min turns, cost share, low
-// average output) is met, so it stays a rare, deliberate hint rather than noise.
 export function modelAdvice(
   records: UsageRecord[],
   now: number,

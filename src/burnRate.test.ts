@@ -102,7 +102,7 @@ test('burnRate separates new tokens from cached context re-reads', () => {
 
 test('etaFromAverageRate judges a 7-day window over days, not minutes (the weekly bug)', () => {
   const now = 1_000_000_000;
-  const resetsAt = now + 80 * HOUR; // 88h into the 7-day window (past the projection gate)
+  const resetsAt = now + 80 * HOUR;
   const eta = etaFromAverageRate(9, resetsAt, SEVEN_DAY_PERIOD_MS, now)!;
   assert.ok(eta > 20 * 24 * HOUR, `expected weeks, got ${(eta / HOUR).toFixed(1)}h`);
   assert.equal(predictsBreachBeforeReset(eta, resetsAt, now), false);
@@ -122,7 +122,7 @@ test('etaFromAverageRate is undefined for idle / full / unknown-reset / too-earl
   assert.equal(etaFromAverageRate(0, reset, FIVE_HOUR_PERIOD_MS, now), undefined);
   assert.equal(etaFromAverageRate(100, reset, FIVE_HOUR_PERIOD_MS, now), undefined);
   assert.equal(etaFromAverageRate(50, undefined, FIVE_HOUR_PERIOD_MS, now), undefined);
-  assert.equal(etaFromAverageRate(80, now - 5 * MIN, FIVE_HOUR_PERIOD_MS, now), undefined); // already reset
+  assert.equal(etaFromAverageRate(80, now - 5 * MIN, FIVE_HOUR_PERIOD_MS, now), undefined);
   const earlyReset = now + (FIVE_HOUR_PERIOD_MS - 5 * MIN);
   assert.equal(etaFromAverageRate(3, earlyReset, FIVE_HOUR_PERIOD_MS, now), undefined);
 });
@@ -150,7 +150,7 @@ test('projectedUtilization is undefined for idle / full / unknown-reset / past-r
 
 test('projectedUtilization > 100 is exactly the breach condition', () => {
   const now = 1_000_000_000;
-  const reset = now + (SEVEN_DAY_PERIOD_MS - 96 * HOUR); // 60% used 4 days into a 7-day week
+  const reset = now + (SEVEN_DAY_PERIOD_MS - 96 * HOUR);
   const proj = projectedUtilization(60, reset, SEVEN_DAY_PERIOD_MS, now)!;
   const eta = etaFromAverageRate(60, reset, SEVEN_DAY_PERIOD_MS, now)!;
   assert.equal(proj > 100, predictsBreachBeforeReset(eta, reset, now));
@@ -300,12 +300,12 @@ test('a vanished resets_at at unchanged high utilization is NOT a rollover (no s
 
 test('5h projection meter shows the projected end-of-window % under and over pace', () => {
   const now0 = 1_000_000_000;
-  // Under pace: 24% at the 50% mark -> ~48%, shown, no breach.
+  // 24% at the 50% mark -> 48%.
   const under = runWindow([{ now: now0, utilization: 24, resetsAt: now0 + 2.5 * HOUR }], { etaMode: 'projection', thresholds: [] });
   assert.equal(under.outcomes[0].annotation, 'projection');
   approx(under.outcomes[0].projectedUtil!, 48);
   assert.equal(under.outcomes[0].fireBreach, false);
-  // Over pace: 70% at the 50% mark -> 140%, shown, and breaches (active + trustworthy).
+  // 70% at the 50% mark -> 140%.
   const over = runWindow([{ now: now0, utilization: 70, resetsAt: now0 + 2.5 * HOUR }], { etaMode: 'projection', thresholds: [] });
   assert.equal(over.outcomes[0].annotation, 'projection');
   approx(over.outcomes[0].projectedUtil!, 140);
@@ -314,48 +314,47 @@ test('5h projection meter shows the projected end-of-window % under and over pac
 
 test('5h projection is damped early instead of amplifying a thin slice', () => {
   const now0 = 1_000_000_000;
-  const elapsed = 1 * HOUR; // 20% into a 5h window: past the 10% floor, before the 50% mark
+  const elapsed = 1 * HOUR;
   const reset = now0 + (FIVE_HOUR_PERIOD_MS - elapsed);
   const { outcomes } = runWindow([{ now: now0, utilization: 30, resetsAt: reset }], { etaMode: 'projection', thresholds: [] });
-  const raw = (30 * FIVE_HOUR_PERIOD_MS) / elapsed; // 150%: the alarming raw extrapolation
-  approx(outcomes[0].projectedUtil!, 78); // shrunk toward the current 30% (confidence 0.4) -> 78%
+  const raw = (30 * FIVE_HOUR_PERIOD_MS) / elapsed;
+  approx(outcomes[0].projectedUtil!, 78); // raw 150% shrunk toward 30% at confidence 0.4
   assert.ok(outcomes[0].projectedUtil! < raw && outcomes[0].projectedUtil! > 30);
-  assert.equal(outcomes[0].annotation, 'projection'); // shown, no longer blank
+  assert.equal(outcomes[0].annotation, 'projection');
 });
 
 test('an over-the-band damped reading before halfway still fires no breach: the ETA gate holds', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 3 * HOUR; // 2h elapsed of a 5h window: 40% in, before the 50% breach gate
+  const reset = now0 + 3 * HOUR;
   const { outcomes } = runWindow([{ now: now0, utilization: 60, resetsAt: reset }], {
     etaMode: 'projection',
     thresholds: [],
-    recentlyActive: true, // actively burning, so only the ETA gate stands between it and a breach
+    recentlyActive: true,
   });
-  // Damped projection is 132% (raw 150% shrunk toward the current 60% at confidence 0.8) — well
-  // over the on-pace band — yet no breach, because etaFromAverageRate stays gated to the 50% mark.
+  // Raw 150% shrunk toward 60% at confidence 0.8 -> 132%.
   approx(outcomes[0].projectedUtil!, 132);
   assert.equal(outcomes[0].annotation, 'projection');
-  assert.equal(outcomes[0].etaMs, undefined); // the guard itself: no ETA before halfway
-  assert.equal(outcomes[0].fireBreach, false); // so a hot damped early reading cannot cry wolf
+  assert.equal(outcomes[0].etaMs, undefined);
+  assert.equal(outcomes[0].fireBreach, false);
 });
 
 test('past the halfway mark the meter equals the raw projection (damping is fully confident)', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 2 * HOUR; // 60% elapsed of a 5h window
+  const reset = now0 + 2 * HOUR;
   const { outcomes } = runWindow([{ now: now0, utilization: 36, resetsAt: reset }], { etaMode: 'projection', thresholds: [] });
-  approx(outcomes[0].projectedUtil!, (36 * FIVE_HOUR_PERIOD_MS) / (3 * HOUR)); // 60%, undamped
+  approx(outcomes[0].projectedUtil!, (36 * FIVE_HOUR_PERIOD_MS) / (3 * HOUR));
 });
 
 test('5h projection stays visible when idle but never fires a breach popup', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 1 * HOUR; // 95% at 4h in -> projects ~119%
+  const reset = now0 + 1 * HOUR;
   const idle = runWindow([{ now: now0, utilization: 95, resetsAt: reset }], {
     etaMode: 'projection',
     thresholds: [],
     recentlyActive: false,
   });
-  assert.equal(idle.outcomes[0].annotation, 'projection'); // still shown (self-corrects downward as you idle)
-  assert.equal(idle.outcomes[0].fireBreach, false); // but a stopped user is never told they'll breach
+  assert.equal(idle.outcomes[0].annotation, 'projection');
+  assert.equal(idle.outcomes[0].fireBreach, false);
 
   const active = runWindow([{ now: now0, utilization: 95, resetsAt: reset }], {
     etaMode: 'projection',
@@ -363,12 +362,12 @@ test('5h projection stays visible when idle but never fires a breach popup', () 
     recentlyActive: true,
   });
   assert.equal(active.outcomes[0].annotation, 'projection');
-  assert.equal(active.outcomes[0].fireBreach, true); // active + over pace + past halfway -> breach
+  assert.equal(active.outcomes[0].fireBreach, true);
 });
 
 test('a knife-edge lead over pace reads "on pace" and raises no alarm', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 146 * MIN; // 53% used, 154 of 300 min elapsed: 1.7pt above an even pace
+  const reset = now0 + 146 * MIN;
   const { outcomes } = runWindow([{ now: now0, utilization: 53, resetsAt: reset }], {
     etaMode: 'projection',
     thresholds: [],
@@ -388,7 +387,7 @@ test('describeProjection reports "on pace" inside the dead-band instead of a coi
 
 test('a heavy-then-idle window does not breach at the 50% mark (front-load + idle false alarm killed)', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 2.5 * HOUR; // 70% used, exactly at the 50% mark of a 5h window -> 140%
+  const reset = now0 + 2.5 * HOUR;
   const idle = runWindow([{ now: now0, utilization: 70, resetsAt: reset }], { etaMode: 'projection', thresholds: [], recentlyActive: false });
   assert.equal(idle.outcomes[0].fireBreach, false);
   const active = runWindow([{ now: now0, utilization: 70, resetsAt: reset }], { etaMode: 'projection', thresholds: [], recentlyActive: true });
@@ -397,20 +396,20 @@ test('a heavy-then-idle window does not breach at the 50% mark (front-load + idl
 
 test('weekly window (risk mode) hides its ETA unless genuinely on track to breach', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 80 * HOUR; // 9% used 88h in -> far under pace
+  const reset = now0 + 80 * HOUR;
   const { outcomes } = runWindow([{ now: now0, utilization: 9, resetsAt: reset }], {
     etaMode: 'risk',
     periodMs: SEVEN_DAY_PERIOD_MS,
     thresholds: [],
   });
-  assert.equal(outcomes[0].annotation, 'none'); // not shown
-  assert.ok(outcomes[0].etaMs! > 20 * 24 * HOUR); // (the underlying ETA is weeks, not ~8h45m)
+  assert.equal(outcomes[0].annotation, 'none');
+  assert.ok(outcomes[0].etaMs! > 20 * 24 * HOUR);
   assert.equal(outcomes[0].fireBreach, false);
 });
 
 test('weekly window (risk mode) shows its ETA and breaches on a trustworthy over-pace track', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + (SEVEN_DAY_PERIOD_MS - 96 * HOUR); // 70% used 4 days in -> projected ~123%
+  const reset = now0 + (SEVEN_DAY_PERIOD_MS - 96 * HOUR);
   const { outcomes } = runWindow([{ now: now0, utilization: 70, resetsAt: reset }], {
     etaMode: 'risk',
     periodMs: SEVEN_DAY_PERIOD_MS,
@@ -446,7 +445,6 @@ test('a window with ETA mode off shows nothing and never breaches', () => {
 
 test('no breach early in the window even when ahead of pace', () => {
   const now0 = 1_000_000_000;
-  // Weekly: 14% used ~17h into the week (~10% elapsed) -> ahead of the on-pace line, but too early.
   const reset = now0 + (SEVEN_DAY_PERIOD_MS - 17 * HOUR);
   const wk = runWindow([{ now: now0, utilization: 14, resetsAt: reset }], { etaMode: 'risk', periodMs: SEVEN_DAY_PERIOD_MS, thresholds: [] });
   assert.equal(wk.outcomes[0].fireBreach, false);
@@ -455,7 +453,7 @@ test('no breach early in the window even when ahead of pace', () => {
 
 test('evaluateWindow fires a breach once when over pace, past halfway, and active', () => {
   const now0 = 1_000_000_000;
-  const reset = now0 + 1 * HOUR; // 4h elapsed of a 5h window, 95% used -> projected ~119%
+  const reset = now0 + 1 * HOUR;
   const { outcomes } = runWindow(
     [
       { now: now0, utilization: 95, resetsAt: reset },
@@ -544,7 +542,7 @@ test('modelAdvice never flags a budget model', () => {
 
 test('a heavy early burn is not reported as "on pace" just because damping lands near 100', () => {
   const now = Date.now();
-  const resetsAt = now + 4.4 * 60 * 60 * 1000; // 36 min into a 5h window
+  const resetsAt = now + 4.4 * 60 * 60 * 1000;
   const damped = projectedUtilization(36, resetsAt, FIVE_HOUR_PERIOD_MS, now)!;
   assert.ok(Math.abs(damped - 100) <= ON_PACE_BAND_PTS, 'precondition: damped lands in the band');
 
@@ -564,7 +562,7 @@ test('a heavy early burn is not reported as "on pace" just because damping lands
 
 test('a genuinely on-pace window still reads "on pace"', () => {
   const now = Date.now();
-  const resetsAt = now + 1 * 60 * 60 * 1000; // 4h into a 5h window
+  const resetsAt = now + 1 * 60 * 60 * 1000;
   const outcome = evaluateWindow(emptyWindowState(), {
     utilization: 80,
     resetsAt,
@@ -587,7 +585,6 @@ test('describeProjection judges the verdict on the raw pace but prints the dampe
 test('non-finite utilization yields no projection or ETA rather than rendering NaN', () => {
   const now = Date.now();
   const resetsAt = now + 2 * 60 * 60 * 1000;
-  // Only NaN reaches the new guard: the infinities were already caught by the 0/100 bounds.
   assert.equal(projectedUtilization(NaN, resetsAt, FIVE_HOUR_PERIOD_MS, now), undefined);
   assert.equal(etaFromAverageRate(NaN, resetsAt, FIVE_HOUR_PERIOD_MS, now), undefined);
   for (const bounded of [Infinity, -Infinity]) {
@@ -595,9 +592,6 @@ test('non-finite utilization yields no projection or ETA rather than rendering N
   }
 });
 
-// A rollover was inferred from a drop alone, so a 0.1-point dip alongside a vanished resets_at
-// (exactly what applyExpiry produces for the 5-hour window) re-armed every alert and re-fired
-// them. A genuine reset always lands the window near empty.
 function windowInput(utilization: number, resetsAt: number | undefined, now: number) {
   return {
     utilization,
@@ -663,6 +657,42 @@ test('an advancing resets_at is still an unambiguous rollover', () => {
   const outcome = evaluateWindow(prev, windowInput(3, now + 5 * 60 * 60 * 1000, now));
   assert.deepEqual(outcome.state.firedThresholds, []);
   assert.equal(outcome.state.breachWarned, false);
+});
+
+test('sub-second resets_at jitter between fetches never re-fires an alert', () => {
+  const now0 = Date.now();
+  const resetsAt = now0 + 2 * HOUR;
+  const { outcomes, states } = runWindow(
+    [
+      { now: now0, utilization: 92, resetsAt },
+      { now: now0 + 6 * MIN, utilization: 92, resetsAt: resetsAt + 820 },
+      { now: now0 + 12 * MIN, utilization: 93, resetsAt: resetsAt + 245 },
+      { now: now0 + 18 * MIN, utilization: 93, resetsAt: resetsAt + 1_049 },
+    ],
+    { predictBreach: true }
+  );
+  assert.equal(outcomes[0].fireThreshold, 90);
+  for (const outcome of outcomes.slice(1)) {
+    assert.equal(outcome.fireThreshold, undefined);
+    assert.equal(outcome.fireBreach, false);
+  }
+  assert.deepEqual(states[3].firedThresholds, [75, 90]);
+});
+
+test('the weekly window only re-arms when resets_at moves to the next week', () => {
+  const now0 = Date.now();
+  const resetsAt = now0 + 3 * 24 * HOUR;
+  const { outcomes } = runWindow(
+    [
+      { now: now0, utilization: 80, resetsAt },
+      { now: now0 + MIN, utilization: 80, resetsAt: resetsAt + 30 * MIN },
+      { now: now0 + 2 * MIN, utilization: 80, resetsAt: resetsAt + SEVEN_DAY_PERIOD_MS },
+    ],
+    { periodMs: SEVEN_DAY_PERIOD_MS }
+  );
+  assert.equal(outcomes[0].fireThreshold, 75);
+  assert.equal(outcomes[1].fireThreshold, undefined, 'a 30-minute shift is not a new week');
+  assert.equal(outcomes[2].fireThreshold, 75);
 });
 
 test('a drop that lands above the floor is a dip; one that lands below it is a rollover', () => {

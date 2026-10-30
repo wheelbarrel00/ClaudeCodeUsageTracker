@@ -1,8 +1,8 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { UsageRecord, UsageSummary, EMPTY_TOKENS } from './types';
-import { estimateCost, pricingForModel, cacheWriteRaw, contextWindowFor } from './pricing';
-import { claudeConfigDir } from './paths';
+import { estimateCost, pricingForModel, promptTokens, cacheWriteRaw, contextWindowFor } from './pricing';
+import { claudeConfigDir, isUnderAny } from './paths';
 
 const SYNTHETIC_MODEL = '<synthetic>';
 
@@ -28,7 +28,6 @@ export interface ParsedEntry {
 interface CachedFile {
   mtimeMs: number;
   size: number;
-  // Byte offset through the last committed line; on growth only [parsedBytes, size) is re-read.
   parsedBytes: number;
   entries: ParsedEntry[];
   index: Map<string, number>;
@@ -39,7 +38,6 @@ interface CachedFile {
 const fileCache = new Map<string, CachedFile>();
 let lastRecords: UsageRecord[] | undefined;
 
-// One shared instance per distinct string; model ids / cwds / sessions repeat across every record.
 const internPool = new Map<string, string>();
 
 function intern(value: string): string {
@@ -55,8 +53,7 @@ export function claudeLogRoot(): string {
   return path.join(claudeConfigDir(), 'projects');
 }
 
-// undefined = a directory in the walk failed to read (an access blip), not "no files": the caller
-// keeps last-good data instead of purging every file and publishing a dipped total.
+// undefined means the walk failed (not "no files"), so the caller keeps last-good data.
 export async function findJsonlFiles(root: string): Promise<string[] | undefined> {
   const files: string[] = [];
   return (await collectJsonl(root, files)) ? files : undefined;
@@ -151,7 +148,6 @@ function newParseState(): ParseState {
   return { entries: [], index: new Map() };
 }
 
-// false only for a non-empty line that isn't valid JSON (a truncated mid-write tail — don't consume).
 function parseLine(state: ParseState, line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -226,9 +222,7 @@ function truncate(value: string, max: number): string {
 const READ_CHUNK_BYTES = 1 << 20;
 const PARSE_YIELD_LINES = 10_000;
 
-// Parse [start, end) into a FRESH state, returning the byte offset consumed. Whole lines commit;
-// a trailing no-newline segment commits only if it parses (else it's a partial mid-write tail).
-// Chunked with a periodic yield so a cold multi-hundred-MB file can't stall the host.
+// A trailing line without a newline commits only if it parses; otherwise it's a mid-write tail.
 async function parseRange(handle: fs.promises.FileHandle, start: number, end: number, state: ParseState): Promise<number> {
   let offset = start;
   let consumed = start;
@@ -242,7 +236,7 @@ async function parseRange(handle: fs.promises.FileHandle, start: number, end: nu
       length,
     });
     if (bytesRead <= 0) {
-      break; // file shrank mid-read; the next pass's size check re-parses
+      break;
     }
     offset += bytesRead;
     const chunk = buffer.subarray(0, bytesRead);
@@ -270,8 +264,7 @@ async function parseRange(handle: fs.promises.FileHandle, start: number, end: nu
   return consumed;
 }
 
-// True when `offset` still sits on a line boundary — distinguishes a real append from a
-// truncate-then-regrow rewrite (which grew past the old size but would resume mid-line).
+// Tells a real append from a truncate-then-regrow rewrite, which would resume mid-line.
 async function endsOnBoundary(handle: fs.promises.FileHandle, offset: number): Promise<boolean> {
   if (offset <= 0) {
     return false;
@@ -281,7 +274,6 @@ async function endsOnBoundary(handle: fs.promises.FileHandle, offset: number): P
   return bytesRead === 1 && buf[0] === 0x0a;
 }
 
-// Fold a cleanly-parsed tail into the cached entries/index in place; keyed dups replace via the index.
 function mergeTail(base: CachedFile, tail: ParseState): void {
   for (const entry of tail.entries) {
     if (entry.key) {
@@ -302,9 +294,6 @@ function mergeTail(base: CachedFile, tail: ParseState): void {
   }
 }
 
-// Tail-parse appended bytes and fold them in (JSONL is append-only); anything else — cold,
-// truncated, or rewritten — is a full re-parse. Parsing goes into a throwaway state committed
-// only on success, so a read blip (a Windows lock/permission mid-write) leaves the cache untouched.
 async function refreshFile(file: string, st: fs.Stats, cached: CachedFile | undefined): Promise<CachedFile | undefined> {
   let handle: fs.promises.FileHandle;
   try {
@@ -313,7 +302,6 @@ async function refreshFile(file: string, st: fs.Stats, cached: CachedFile | unde
     return cached;
   }
   try {
-    // An unguarded rejection escapes the caller's Promise.all and drops the whole refresh tick.
     let canTail = false;
     if (cached !== undefined && st.size > cached.size) {
       try {
@@ -350,16 +338,13 @@ async function refreshFile(file: string, st: fs.Stats, cached: CachedFile | unde
   } finally {
     try {
       await handle.close();
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 }
 
 export async function loadUsageRecords(): Promise<UsageRecord[]> {
   const files = await findJsonlFiles(claudeLogRoot());
   if (files === undefined) {
-    // Root walk failed: serve the last good snapshot rather than publishing zeros.
     return lastRecords ?? [];
   }
   const present = new Set(files);
@@ -379,7 +364,6 @@ export async function loadUsageRecords(): Promise<UsageRecord[]> {
     const st = stats[i];
     const cached = fileCache.get(file);
     if (!st) {
-      // A stat blip on an already-parsed file must not dip totals; reuse its cached entries.
       if (cached) {
         results.push(cached);
       }
@@ -399,7 +383,6 @@ export async function loadUsageRecords(): Promise<UsageRecord[]> {
     }
   }
 
-  // Nothing changed: skip the O(all-records) flatten and reuse the last snapshot.
   if (!changed && lastRecords) {
     return lastRecords;
   }
@@ -444,7 +427,7 @@ export interface CostParts {
 export function costBreakdown(records: UsageRecord[]): CostParts {
   const parts: CostParts = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
   for (const record of records) {
-    const p = pricingForModel(record.model, record.speed);
+    const p = pricingForModel(record.model, record.speed, promptTokens(record.tokens));
     parts.input += (record.tokens.input * p.input) / 1_000_000;
     parts.output += (record.tokens.output * p.output) / 1_000_000;
     parts.cacheWrite += cacheWriteRaw(record.tokens, p) / 1_000_000;
@@ -498,8 +481,7 @@ function bucketBy(records: UsageRecord[], keyOf: (date: Date) => string): Map<st
   return buckets;
 }
 
-// Daily buckets, 1st through today, empty days filled. Each day is built from its index (not a
-// cursor): a non-existent spring-forward midnight would otherwise stick at 01:00 and drop today.
+// Built by index, not a cursor: a missing spring-forward midnight would stick at 01:00.
 export function summarizeDaily(records: UsageRecord[], now = new Date()): TrendBucket[] {
   const buckets = bucketBy(records, dayKeyOf);
   const year = now.getFullYear();
@@ -513,7 +495,6 @@ export function summarizeDaily(records: UsageRecord[], now = new Date()): TrendB
   return result;
 }
 
-// Monthly buckets, earliest record's month through now, gaps filled; built by index (see summarizeDaily).
 export function summarizeMonthly(records: UsageRecord[], now = new Date()): TrendBucket[] {
   if (records.length === 0) {
     return [];
@@ -536,13 +517,22 @@ export function summarizeMonthly(records: UsageRecord[], now = new Date()): Tren
   return result;
 }
 
-// Skips subagent turns: usually the most recent record, so the headline jumped on every Task
-// launch. Their tokens still count everywhere spend is reported.
-export function currentContext(records: UsageRecord[], now = Date.now()): ContextInfo | undefined {
+export function currentContext(records: UsageRecord[], now = Date.now(), roots: string[] = []): ContextInfo | undefined {
+  const inScope = new Map<string | undefined, boolean>();
   let latest: UsageRecord | undefined;
   for (const record of records) {
     if (record.isSidechain) {
       continue;
+    }
+    if (roots.length > 0) {
+      let hit = inScope.get(record.cwd);
+      if (hit === undefined) {
+        hit = isUnderAny(record.cwd, roots);
+        inScope.set(record.cwd, hit);
+      }
+      if (!hit) {
+        continue;
+      }
     }
     const tokens = record.tokens.input + record.tokens.cacheRead + record.tokens.cacheWrite;
     if (tokens <= 0) {
@@ -601,8 +591,7 @@ function gitRootFor(cwd: string): string | null {
   }
 }
 
-// Fold case for grouping keys only where the filesystem does (Windows/macOS); on Linux
-// /dev/API and /dev/api are distinct projects. Display labels keep their original case.
+// Fold case only where the filesystem does; on Linux /dev/API and /dev/api are distinct.
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
 function foldCase(value: string): string {
@@ -696,8 +685,6 @@ export interface SessionSummary {
   summary: UsageSummary;
 }
 
-// Gaps longer than this are treated as the session being put down and resumed,
-// not active work, so they are excluded from the active-time total.
 const ACTIVE_GAP_MS = 15 * 60 * 1000;
 
 export function summarizeBySession(records: UsageRecord[]): SessionSummary[] {

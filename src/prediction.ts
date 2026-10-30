@@ -3,6 +3,7 @@ import { UsageRecord } from './types';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 import { familyLabel } from './pricing';
 import { formatCurrency } from './format';
+import { numberSetting, ACTIVITY_WINDOW_MIN } from './settings';
 import {
   burnRate,
   evaluateWindow,
@@ -25,8 +26,8 @@ const DONT_SHOW_AGAIN = "Don't show again";
 
 export interface WindowEta {
   etaMs?: number;
-  segment?: string; // appended to the status-bar limit item, e.g. "→ 48%" or "· ~2d"
-  detail?: string; // appended in the tooltip line, e.g. "projected ~48% by reset"
+  segment?: string;
+  detail?: string;
 }
 
 export interface PredictionView {
@@ -51,11 +52,6 @@ interface PredictionConfig {
 const FIVE_HOUR = 'fiveHour';
 const SEVEN_DAY = 'sevenDay';
 
-// Owns the prediction state across refreshes: the in-memory alert debounce per
-// window, the burn-rate ETA shown in the status bar, and the debounced proactive
-// warnings. All decision logic lives in the pure layer (burnRate.ts); this class
-// only carries state and turns its verdicts into VS Code notifications. The ETA is
-// stateless (period-anchored), so there is nothing to persist or warm up.
 export class PredictionController {
   private readonly states = new Map<string, WindowState>();
   private advisedAt = 0;
@@ -70,8 +66,6 @@ export class PredictionController {
       this.maybeAdvise(modelAdvice(records, now, cfg.windowMs), cfg, now);
     }
     const burn = burnRate(records, now, cfg.windowMs);
-    // The average-rate ETA is stateless and can't tell whether you're still burning;
-    // recent records can. An idle window won't keep showing/alerting an ETA.
     const recentlyActive = burn.recordCount > 0;
     return {
       enabled: true,
@@ -103,8 +97,7 @@ export class PredictionController {
     now: number
   ): WindowEta | undefined {
     if (!window) {
-      // Keep prior debounce state so a brief gap in limit data doesn't re-fire an
-      // alert when the window reappears.
+      // Keep the debounce through a brief data gap so the window's reappearance doesn't re-fire an alert.
       return undefined;
     }
     const outcome = evaluateWindow(this.states.get(id) ?? emptyWindowState(), {
@@ -176,8 +169,7 @@ function notifyAdvice(advice: ModelAdvice, currency: string, decimals: number): 
 
 function readConfig(): PredictionConfig {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const minutes = Math.max(1, cfg.get<number>('predictiveAlerts.windowMinutes', 15));
-  // 5h shows an always-on pace projection; weekly only when genuinely at risk.
+  const minutes = numberSetting(cfg.get('predictiveAlerts.windowMinutes'), ACTIVITY_WINDOW_MIN);
   const fiveHourEtaMode: EtaMode = cfg.get<boolean>('predictiveAlerts.showFiveHourEta', true) ? 'projection' : 'off';
   const weeklyEtaMode: EtaMode = cfg.get<boolean>('predictiveAlerts.showWeeklyEta', true) ? 'risk' : 'off';
   return {

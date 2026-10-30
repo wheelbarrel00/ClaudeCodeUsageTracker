@@ -20,7 +20,6 @@ import { formatCurrency } from './format';
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ICON = '$(ccut-claude)';
 
-/** Owns the status-bar presentation for the extension. */
 export class StatusBarController {
   private readonly fiveHour: vscode.StatusBarItem;
   private readonly weekly: vscode.StatusBarItem;
@@ -36,7 +35,6 @@ export class StatusBarController {
     this.main.show();
   }
 
-  // Distinct ids + names keep the four items tellable apart in the "Hide" menu, each with its own visibility.
   private createItem(id: string, name: string, priority: number): vscode.StatusBarItem {
     const item = vscode.window.createStatusBarItem(`${CONFIG_SECTION}.${id}`, vscode.StatusBarAlignment.Right, priority);
     item.name = name;
@@ -45,7 +43,6 @@ export class StatusBarController {
     return item;
   }
 
-  /** Render a usage summary, honouring the user's display settings. */
   render(summary: UsageSummary, limits?: PlanLimits, context?: ContextInfo, prediction?: PredictionView): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const showLimits = cfg.get<boolean>('showLimits', true);
@@ -184,8 +181,6 @@ function buildTooltip(limits?: PlanLimits, context?: ContextInfo, extra?: ExtraU
       }
     }
   }
-  // Its own block: the burn rate does not feed the pace projection, which is derived from
-  // the API's utilization and the wall clock.
   if (pred?.burnLines?.length) {
     if (lines.length) {
       lines.push('');

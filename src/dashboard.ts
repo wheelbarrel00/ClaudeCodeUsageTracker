@@ -77,8 +77,7 @@ export class Dashboard {
       this.aiRunId += 1;
       this.aiInFlight = false;
     });
-    // Without retainContextWhenHidden the webview reloads on reveal (re-posting 'ready'); drop
-    // readiness on hide so a stale post can't race the reload.
+    // The webview reloads on reveal; drop readiness on hide so a stale post can't race it.
     this.panel.onDidChangeViewState(() => {
       if (this.panel && !this.panel.visible) {
         this.ready = false;
@@ -91,7 +90,6 @@ export class Dashboard {
       if (message.type === 'ready') {
         this.ready = true;
         this.post();
-        // The AI explanation isn't in the payload; re-send it so it survives a hide/reveal reload.
         if (this.lastAiHtml) {
           this.panel?.webview.postMessage({ type: 'aiResult', html: this.lastAiHtml });
         }
@@ -105,13 +103,11 @@ export class Dashboard {
   update(records: UsageRecord[], limits?: PlanLimits): void {
     this.records = records;
     this.limits = limits;
-    // A hidden panel is torn down; the reload's 'ready' handshake re-sends the latest data on reveal.
     if (this.panel?.visible && this.ready) {
       this.schedulePost();
     }
   }
 
-  // buildPayload makes 15-20 full passes over every record and the watcher can fire every 750ms.
   private schedulePost(): void {
     if (this.postTimer) {
       return;
@@ -144,15 +140,12 @@ export class Dashboard {
       return;
     }
     if (this.aiInFlight) {
-      // The webview has already painted its spinner; a silent return leaves it stuck.
       this.panel?.webview.postMessage({
         type: 'aiResult',
         html: renderAiHtml({ ok: false, error: 'An explanation is already being generated — one moment.' }),
       });
       return;
     }
-    // Drop the result if the panel was closed/replaced mid-request — else the next dashboard
-    // would replay a stale, unrequested AI box on its 'ready' handshake.
     const panel = this.panel;
     const runId = ++this.aiRunId;
     this.aiInFlight = true;
@@ -160,10 +153,9 @@ export class Dashboard {
     try {
       result = await this.ai.explain(this.records, this.limits);
     } catch (err) {
-      // Without this the webview's "Analyzing your usage…" spinner would hang forever.
       result = { ok: false, error: `AI explanation failed: ${err instanceof Error ? err.message : String(err)}` };
     } finally {
-      // Only if this run still owns the guard: a request abandoned by a panel close must not unlock a newer one.
+      // A request abandoned by a panel close must not unlock a newer one.
       if (this.aiRunId === runId) {
         this.aiInFlight = false;
       }

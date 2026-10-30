@@ -13,6 +13,7 @@ import {
   summarizeBySession,
 } from './dataLoader';
 import { UsageRecord, EMPTY_TOKENS } from './types';
+import * as paths from './paths';
 
 function line(overrides: {
   id: string;
@@ -74,8 +75,6 @@ test('a single-line message is unaffected', () => {
   assert.equal(entries[0].record.tokens.output, 42);
 });
 
-// --- loadUsageRecords: incremental tail parsing against a real temp log root ---
-
 async function withRoot(fn: (projDir: string) => Promise<void>): Promise<void> {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ccut-test-'));
   const prev = process.env.CLAUDE_CONFIG_DIR;
@@ -129,7 +128,7 @@ test('an unchanged pass reuses the last snapshot without a rebuild', async () =>
     );
     const first = await loadUsageRecords();
     const second = await loadUsageRecords();
-    assert.equal(second, first); // referential: the memoized array
+    assert.equal(second, first);
   });
 });
 
@@ -161,7 +160,7 @@ test('a same-size in-place rewrite is detected via mtime and re-parsed', async (
 
     await fs.promises.writeFile(file, after);
     const bumped = new Date(Date.now() + 5000);
-    await fs.promises.utimes(file, bumped, bumped); // force a distinct mtime for same-ms writes
+    await fs.promises.utimes(file, bumped, bumped);
     assert.deepEqual(outputs(await loadUsageRecords()), [7]);
   });
 });
@@ -205,19 +204,14 @@ test('a failed root walk serves the last good snapshot instead of zeros', async 
 
     process.env.CLAUDE_CONFIG_DIR = path.join(os.tmpdir(), 'ccut-definitely-missing', String(process.pid));
     const fallback = await loadUsageRecords();
-    assert.equal(fallback, good); // last snapshot, not []
+    assert.equal(fallback, good);
   });
 });
 
-// --- regression tests for the adversarial verify pass ---
-
-// A distinct keyed filler line, unique per index so keyed dedup never collapses it.
 function fillerLine(i: number): string {
   return line({ id: `fill_${i}`, requestId: `fr_${i}`, output: 1, stop: 'end_turn' });
 }
 
-// An assistant usage line with no message.id / requestId / uuid, so parseUsageEntry
-// assigns it an empty key — the shape that used to double-count on a faulted retry.
 function keylessLine(output: number): string {
   return JSON.stringify({
     type: 'assistant',
@@ -273,7 +267,7 @@ function patchFault(method: 'stat' | 'readdir', shouldThrow: (p: string) => bool
 
 test('a >1MiB history parses correctly across chunk boundaries', async () => {
   await withRoot(async (projDir) => {
-    const count = 4000; // ~1.2MiB of distinct keyed lines, spanning multiple 1MiB reads
+    const count = 4000;
     const body = Array.from({ length: count }, (_, i) => fillerLine(i)).join('\n') + '\n';
     assert.ok(Buffer.byteLength(body) > 1 << 20);
     await fs.promises.writeFile(path.join(projDir, 's1.jsonl'), body);
@@ -294,11 +288,9 @@ test('a mid-read failure on an incremental pass leaves totals unchanged and neve
     assert.equal(seed.length, 2);
     const oldSize = (await fs.promises.stat(file)).size;
 
-    // Append the keyless line first (lands in chunk 1, would be committed before a
-    // second-chunk read), then >1MiB of distinct keyed filler so the tail spans two reads.
+    // The keyless line lands in chunk 1; the >1MiB filler pushes the tail into a second read, which fails.
     await fs.promises.appendFile(file, keylessLine(777) + '\n' + bytesOver(1 << 20));
 
-    // Fail the SECOND tail read (position strictly past oldSize), after chunk 1 committed.
     const restore = patchOpenReadFault((position) => position > oldSize);
     let faulted: UsageRecord[];
     try {
@@ -306,16 +298,13 @@ test('a mid-read failure on an incremental pass leaves totals unchanged and neve
     } finally {
       restore();
     }
-    // The cache was mutated only on success, so the faulted pass shows the seed totals —
-    // not a partial commit of chunk 1.
     assert.equal(faulted.length, 2);
     assert.equal(faulted.filter((r) => r.tokens.output === 777).length, 0);
 
-    // The clean retry parses the tail once: the keyless line appears exactly once.
     const recovered = await loadUsageRecords();
     assert.equal(recovered.filter((r) => r.tokens.output === 777).length, 1);
     const again = await loadUsageRecords();
-    assert.equal(again.filter((r) => r.tokens.output === 777).length, 1); // permanence
+    assert.equal(again.filter((r) => r.tokens.output === 777).length, 1);
   });
 });
 
@@ -331,8 +320,7 @@ test('a grow-past-size rewrite is not mistaken for an append (boundary check for
     const oldSize = (await fs.promises.stat(file)).size;
     assert.deepEqual(outputs(await loadUsageRecords()), [11, 22, 33]);
 
-    // One long single line, grown past the old size, whose byte at oldSize-1 is inside
-    // the JSON (not a newline) — a truncate-then-regrow rewrite masquerading as growth.
+    // One line grown past oldSize with no newline at oldSize-1: a rewrite posing as an append.
     const padded = JSON.stringify({
       type: 'assistant',
       timestamp: '2026-07-13T06:00:00.000Z',
@@ -346,7 +334,6 @@ test('a grow-past-size rewrite is not mistaken for an append (boundary check for
     const bumped = new Date(Date.now() + 5000);
     await fs.promises.writeFile(file, padded + '\n');
     await fs.promises.utimes(file, bumped, bumped);
-    // Only the new record — no phantom old records, no mid-line garbage.
     assert.deepEqual(outputs(await loadUsageRecords()), [99]);
   });
 });
@@ -368,7 +355,7 @@ test('a subdirectory walk failure serves last-good instead of dipping totals or 
     } finally {
       restore();
     }
-    assert.equal(dipped, good); // last snapshot, not a dip to []
+    assert.equal(dipped, good);
   });
 });
 
@@ -380,7 +367,6 @@ test('a per-file stat failure keeps that file’s cached contribution (C8)', asy
     await fs.promises.writeFile(b, line({ id: 'b1', requestId: 'br1', output: 200, stop: 'end_turn' }) + '\n');
     assert.deepEqual(outputs(await loadUsageRecords()), [100, 200]);
 
-    // b changes (forces a rebuild) while a's stat blips: a's history must survive.
     await fs.promises.appendFile(b, line({ id: 'b2', requestId: 'br2', output: 201, stop: 'end_turn' }) + '\n');
     const restore = patchFault('stat', (p) => p === a);
     let out: number[];
@@ -389,7 +375,7 @@ test('a per-file stat failure keeps that file’s cached contribution (C8)', asy
     } finally {
       restore();
     }
-    assert.ok(out.includes(100)); // a not dropped for the pass
+    assert.ok(out.includes(100));
     assert.deepEqual(out, [100, 200, 201]);
   });
 });
@@ -401,15 +387,12 @@ function recordWithCwd(cwd: string): UsageRecord {
 test('project grouping folds case per the platform filesystem', () => {
   const groups = summarizeByProject([recordWithCwd('C:\\Repo'), recordWithCwd('c:\\repo')], 'flat');
   if (process.platform === 'win32' || process.platform === 'darwin') {
-    assert.equal(groups.length, 1); // case-insensitive FS: one project
+    assert.equal(groups.length, 1);
   } else {
-    assert.equal(groups.length, 2); // case-sensitive FS: distinct projects
+    assert.equal(groups.length, 2);
   }
 });
 
-// Subagent turns carry the parent's sessionId, cwd and branch, so after parsing they are
-// indistinguishable from the main thread — and they are usually the most recent record. The
-// headline ctx% jumped tens of points on every Task launch and back again when one finished.
 function ctxRecord(timestamp: number, cacheRead: number, isSidechain: boolean): UsageRecord {
   return {
     timestamp,
@@ -441,6 +424,34 @@ test('a conversation with no subagent turns is unaffected', () => {
 test('subagent-only records leave the context readout empty rather than misreporting it', () => {
   const now = Date.now();
   assert.equal(currentContext([ctxRecord(now - 1000, 90_000, true)], now), undefined);
+});
+
+test('a window reports its own workspace session, not whichever session wrote last', () => {
+  const now = Date.now();
+  const mine = path.resolve('/work/tracker');
+  const at = (timestamp: number, cacheRead: number, cwd: string): UsageRecord => ({
+    ...ctxRecord(timestamp, cacheRead, false),
+    cwd,
+  });
+  const records = [
+    at(now - 3000, 300_000, path.join(mine, 'src')),
+    at(now - 2000, 500_000, path.resolve('/work/trackerExtra')),
+    at(now - 1000, 700_000, path.resolve('/elsewhere')),
+  ];
+  assert.equal(currentContext(records, now, [mine])?.tokens, 300_000);
+  assert.equal(currentContext(records, now, [path.resolve('/nothing-here')]), undefined);
+  assert.equal(currentContext(records, now)?.tokens, 700_000, 'an empty window keeps the latest session');
+});
+
+test('workspace scoping checks each distinct cwd once, not every record', (t) => {
+  const check = t.mock.method(paths, 'isUnderAny');
+  const now = Date.now();
+  const records = Array.from({ length: 1000 }, (_, i) => ({
+    ...ctxRecord(now - 1000 + i, 1000, false),
+    cwd: path.resolve(i % 2 ? '/work/a' : '/work/b'),
+  }));
+  assert.equal(currentContext(records, now, [path.resolve('/work/a')])?.tokens, 1000);
+  assert.equal(check.mock.callCount(), 2);
 });
 
 test('the sidechain flag survives parsing', () => {
@@ -492,6 +503,18 @@ test('fast-mode records are priced at the premium rate through summarize and cos
   assert.equal(summarize([{ ...base, speed: 'fast' }]).costUsd, 20);
   assert.equal(costBreakdown([base]).cacheRead, 5);
   assert.equal(costBreakdown([{ ...base, speed: 'fast' }]).cacheRead, 10);
+});
+
+test('costBreakdown picks the same Haiku 5.5 rate card as the summary total', () => {
+  const record: UsageRecord = {
+    timestamp: Date.now(),
+    model: 'claude-haiku-5-5',
+    tokens: { ...EMPTY_TOKENS, input: 1_000_000, output: 1_000_000 },
+  };
+  const parts = costBreakdown([record]);
+  assert.equal(parts.input, 0.5);
+  assert.equal(parts.output, 2.5);
+  assert.equal(parts.input + parts.output, summarize([record]).costUsd);
 });
 
 test('peak context per session excludes subagent turns', () => {

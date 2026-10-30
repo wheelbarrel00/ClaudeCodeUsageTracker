@@ -38,7 +38,6 @@ function byId(insights: Insight[], id: string): Insight | undefined {
   return insights.find((i) => i.id === id);
 }
 
-// A mid-June "now" so the forecast rule is deterministic: day 15 of a 30-day month.
 const JUNE_15 = new Date(2026, 5, 15, 12, 0, 0).getTime();
 
 test('model-mix flags short-output spend on an expensive model with a positive saving', () => {
@@ -47,8 +46,24 @@ test('model-mix flags short-output spend on an expensive model with a positive s
   assert.ok(insight);
   assert.equal(insight!.severity, 'tip');
   assert.match(insight!.title, /Sonnet/);
-  // Per turn: opus $5.0025 vs sonnet $3.0015 = $2.001 saved; x6 = $12.006.
+  // Per turn: opus $5.0025 vs sonnet 5.5 $2.001 = $3.0015 saved; x6 = $18.009.
+  assert.ok(insight!.savingsUsd! > 18 && insight!.savingsUsd! < 18.01);
+});
+
+test('model-mix re-prices Opus 5.5 at its own rates against Sonnet 5.5', () => {
+  const records = Array.from({ length: 6 }, () => record({ input: 1_000_000, output: 100 }, 'claude-opus-5-5'));
+  const insight = byId(run({ records }), 'model-mix');
+  assert.ok(insight);
+  // Per turn: opus 5.5 $4.002 vs sonnet 5.5 $2.001 = $2.001 saved; x6 = $12.006.
   assert.ok(insight!.savingsUsd! > 12 && insight!.savingsUsd! < 12.01);
+});
+
+test('model-mix still finds a saving on cache-heavy Fable 5.1 turns', () => {
+  const records = Array.from({ length: 6 }, () => record({ cacheRead: 10_000_000, output: 100 }, 'claude-fable-5-1'));
+  const insight = byId(run({ records }), 'model-mix');
+  assert.ok(insight);
+  // Per turn: fable 5.1 $2.505 vs sonnet 5.5 $1.001 = $1.504 saved; x6 = $9.024.
+  assert.ok(insight!.savingsUsd! > 9.02 && insight!.savingsUsd! < 9.03);
 });
 
 test('savingsBadge frames a pay-as-you-go saving green but a subscriber figure as a usage gauge', () => {
@@ -61,7 +76,6 @@ test('savingsBadge frames a pay-as-you-go saving green but a subscriber figure a
   assert.match(payg.title, /saving/i);
   assert.match(payg.text, /^~\$/);
 
-  // On a subscription the same figure must never read as a green cash "saving".
   const sub = savingsBadge(insight, money, true)!;
   assert.equal(sub.gauge, true);
   assert.doesNotMatch(sub.title, /saving/i);
@@ -87,14 +101,15 @@ test('model-mix stays silent below the minimum turn count', () => {
 });
 
 test('model-mix stays silent below the minimum saving floor', () => {
-  // 6 tiny opus turns: saving is well under $1.
   const records = Array.from({ length: 6 }, () => record({ input: 10_000, output: 50 }, 'claude-opus-4-8'));
   assert.equal(byId(run({ records }), 'model-mix'), undefined);
 });
 
 test('model-mix never flags a budget model', () => {
-  const records = Array.from({ length: 8 }, () => record({ input: 10_000_000, output: 100 }, 'claude-haiku-4-5'));
-  assert.equal(byId(run({ records }), 'model-mix'), undefined);
+  for (const model of ['claude-haiku-4-5', 'claude-haiku-5-5']) {
+    const records = Array.from({ length: 8 }, () => record({ input: 10_000_000, output: 100 }, model));
+    assert.equal(byId(run({ records }), 'model-mix'), undefined, model);
+  }
 });
 
 test('model-mix maps Fable to Sonnet with a correct positive saving', () => {
@@ -102,8 +117,8 @@ test('model-mix maps Fable to Sonnet with a correct positive saving', () => {
   const insight = byId(run({ records }), 'model-mix');
   assert.ok(insight);
   assert.match(insight!.title, /Sonnet/);
-  // Per turn: fable $10.005 vs sonnet $3.0015 = $7.0035 saved; x6 = $42.021.
-  assert.ok(insight!.savingsUsd! > 42 && insight!.savingsUsd! < 42.03);
+  // Per turn: fable $10.005 vs sonnet 5.5 $2.001 = $8.004 saved; x6 = $48.024.
+  assert.ok(insight!.savingsUsd! > 48 && insight!.savingsUsd! < 48.03);
 });
 
 test('model-mix picks the model with the larger realisable saving', () => {
@@ -113,9 +128,8 @@ test('model-mix picks the model with the larger realisable saving', () => {
   ];
   const insight = byId(run({ records }), 'model-mix');
   assert.ok(insight);
-  // Opus->Sonnet saves $2/MTok x 6M = $12; Sonnet->Haiku saves $2/MTok x 6M = $12 too,
-  // but cache/output differences make Opus the larger; just assert it names a real tier.
-  assert.match(insight!.title, /Route routine (Opus|Sonnet) turns/);
+  // Opus 4.8 -> Sonnet 5.5 saves $3/MTok x 6M = $18; Sonnet 4.6 -> Haiku 5.5 (long-prompt card) $2.50 x 6M = $15.
+  assert.match(insight!.title, /Route routine Opus turns/);
 });
 
 test('cache-efficiency flags long sessions that reused little context', () => {
@@ -132,7 +146,6 @@ test('cache-efficiency stays silent when long sessions reuse cache well', () => 
 });
 
 test('cache-efficiency ignores short fresh sessions even at low reuse', () => {
-  // Brand-new sessions: low reuse, but only a couple of turns each — not churn.
   const fresh = session(50, { input: 2_000_000, cacheWrite: 2_000_000, cacheRead: 0 }, 2);
   assert.equal(byId(run({ sessions: [fresh, fresh] }), 'cache-efficiency'), undefined);
 });
@@ -153,7 +166,7 @@ test('context-bloat stays silent with only one hot session', () => {
 });
 
 test('spend-forecast projects from the spend so far at the current pace', () => {
-  // $6 of opus output (200k out * $25/MTok = $5) + input; just assert a doubling on day 15/30.
+  // 200k out @ $25/MTok = $5, plus input; day 15 of 30 should double it.
   const records = [record({ input: 1_000_000, output: 200_000 }, 'claude-opus-4-8')];
   const insight = byId(run({ records, now: JUNE_15 }), 'spend-forecast');
   assert.ok(insight);
@@ -179,7 +192,7 @@ test('model-mix points a subscriber to their session limits (savings unchanged)'
   const insight = byId(run({ records, subscription: true }), 'model-mix');
   assert.ok(insight);
   assert.match(insight!.detail, /5-hour \/ weekly limits/);
-  assert.ok(insight!.savingsUsd! > 12 && insight!.savingsUsd! < 12.01);
+  assert.ok(insight!.savingsUsd! > 18 && insight!.savingsUsd! < 18.01);
 });
 
 test('analyze returns nothing for empty input', () => {
@@ -203,6 +216,6 @@ test('fast-mode turns are re-priced at the premium rate in the model-mix saving'
   }));
   const insight = byId(run({ records }), 'model-mix');
   assert.ok(insight);
-  // Per turn: opus at fast rates $10.005 vs sonnet at standard $3.0015 = $7.0035; x6 = $42.021.
-  assert.ok(insight!.savingsUsd! > 42 && insight!.savingsUsd! < 42.03);
+  // Per turn: opus at fast rates $10.005 vs sonnet 5.5 at standard $2.001 = $8.004; x6 = $48.024.
+  assert.ok(insight!.savingsUsd! > 48 && insight!.savingsUsd! < 48.03);
 });

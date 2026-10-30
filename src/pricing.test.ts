@@ -15,7 +15,6 @@ function tokens(partial: Partial<TokenCounts>): TokenCounts {
 }
 
 test('estimateCost prices the 1-hour cache-write TTL at 2x input, not the 5-minute 1.25x', () => {
-  // Opus input = $5/MTok -> 5m cache write 6.25, 1h cache write 10.
   // 600k @ 6.25 + 400k @ 10 = 3.75 + 4.00 = 7.75
   const cost = estimateCost(tokens({ cacheWrite: 1_000_000, cacheWrite1h: 400_000 }), 'claude-opus-4-8');
   assert.equal(cost, 7.75);
@@ -23,7 +22,7 @@ test('estimateCost prices the 1-hour cache-write TTL at 2x input, not the 5-minu
 
 test('estimateCost with no 1-hour portion prices all cache writes at the 5-minute rate', () => {
   const cost = estimateCost(tokens({ cacheWrite: 1_000_000 }), 'claude-opus-4-8');
-  assert.equal(cost, 6.25); // 1M @ 6.25, unchanged from before the split
+  assert.equal(cost, 6.25);
 });
 
 test('cacheWriteRaw clamps a 1-hour count that exceeds the total (defensive)', () => {
@@ -33,7 +32,7 @@ test('cacheWriteRaw clamps a 1-hour count that exceeds the total (defensive)', (
 
 test('pricingForModel returns exact matches, including the newly-added Sonnet 5', () => {
   assert.equal(pricingForModel('claude-opus-4-8').input, 5);
-  assert.equal(pricingForModel('claude-sonnet-5').input, 2); // intro pricing; had fallen through to $3
+  assert.equal(pricingForModel('claude-sonnet-5').input, 2);
   assert.equal(pricingForModel('claude-haiku-4-5').input, 1);
 });
 
@@ -44,31 +43,30 @@ test('pricingForModel matches provider-prefixed and suffixed ids by inclusion', 
 });
 
 test('pricingForModel falls back by family for unlisted ids instead of the mid-tier default', () => {
-  assert.equal(pricingForModel('claude-opus-4-9').input, 5); // future Opus -> Opus, not the $3 default
-  assert.equal(pricingForModel('claude-mythos-5').input, 10); // Mythos -> Fable tier
+  assert.equal(pricingForModel('claude-opus-4-9').input, 5);
+  assert.equal(pricingForModel('claude-mythos-5').input, 10);
   assert.equal(pricingForModel('claude-haiku-9').input, 1);
 });
 
 test('unlisted Sonnet ids fall back to standard $3/$15, not Sonnet 5 intro pricing', () => {
-  // Legacy/other sonnet ids not in the table must not inherit Sonnet 5's temporary
-  // $2/$10 — they were really $3/$15, so the family fallback prices them there.
   for (const id of ['claude-sonnet-4-5', 'claude-sonnet-4-0', 'claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022']) {
     assert.equal(pricingForModel(id).input, 3, id);
     assert.equal(pricingForModel(id).output, 15, id);
   }
-  // The exact Sonnet 5 id still gets its intro rate.
   assert.equal(pricingForModel('claude-sonnet-5').input, 2);
 });
 
 test('pricingForModel uses the mid-tier default only for a genuinely unrecognizable id', () => {
-  assert.equal(pricingForModel('some-unknown-model').input, 3); // Sonnet 4.6 default
+  assert.equal(pricingForModel('some-unknown-model').input, 3);
 });
 
 test('familyOf centralizes label, cheaper tier, and re-pricing id per family', () => {
   const opus = familyOf('anthropic.claude-opus-4-9[1m]');
   assert.equal(opus?.label, 'Opus');
   assert.equal(opus?.cheaperLabel, 'Sonnet');
-  assert.equal(opus?.cheaperId, 'claude-sonnet-4-6');
+  assert.equal(opus?.cheaperId, 'claude-sonnet-5-5');
+  assert.equal(familyOf('claude-fable-5-1')?.cheaperId, 'claude-sonnet-5-5');
+  assert.equal(familyOf('claude-sonnet-5-5')?.cheaperId, 'claude-haiku-5-5');
   assert.equal(familyOf('claude-mythos-5')?.label, 'Fable');
   assert.equal(familyOf('claude-haiku-4-5')?.cheaperLabel, undefined);
   assert.equal(familyOf('some-unknown-model'), undefined);
@@ -89,6 +87,43 @@ test('claude-fable-5-1 prices cache reads at its own rate, not Fable 5s', () => 
 test('a suffixed Fable 5.1 id still resolves to 5.1, not the shorter Fable 5 key', () => {
   assert.equal(pricingForModel('claude-fable-5-1[1m]').cacheRead, 0.25);
   assert.equal(pricingForModel('us.anthropic.claude-fable-5-1').cacheRead, 0.25);
+});
+
+test('Opus 5.5 has its own rates, not Opus 5s, however the id is decorated', () => {
+  for (const id of ['claude-opus-5-5', 'claude-opus-5-5[1m]', 'anthropic.claude-opus-5-5']) {
+    assert.deepEqual(pricingForModel(id), { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 }, id);
+  }
+  assert.equal(estimateCost(tokens({ cacheWrite: 1_000_000, cacheWrite1h: 1_000_000 }), 'claude-opus-5-5'), 8);
+  assert.equal(pricingForModel('claude-opus-5-5', 'fast').output, 40);
+  assert.equal(pricingForModel('claude-opus-5').input, 5);
+});
+
+test('Sonnet 5.5 and Mythos 5.1 resolve to their own rows', () => {
+  assert.deepEqual(pricingForModel('claude-sonnet-5-5'), { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.1 });
+  assert.equal(pricingForModel('claude-sonnet-5').cacheRead, 0.2);
+  assert.equal(pricingForModel('claude-mythos-5-1').cacheRead, 0.25);
+  assert.equal(pricingForModel('claude-mythos-5').cacheRead, 1.0);
+});
+
+test('Haiku 5.5 switches rate cards once the whole prompt passes 100K tokens', () => {
+  assert.equal(pricingForModel('claude-haiku-5-5').input, 0.1);
+  assert.equal(pricingForModel('claude-haiku-5-5', undefined, 100_000).input, 0.1);
+  assert.equal(pricingForModel('claude-haiku-5-5', undefined, 100_001).input, 0.5);
+  assert.equal(pricingForModel('us.anthropic.claude-haiku-5-5', undefined, 100_001).output, 2.5);
+  assert.equal(pricingForModel('claude-haiku-4-5', undefined, 500_000).input, 1);
+
+  const close = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual}`);
+  const short = tokens({ input: 1_000, cacheRead: 90_000, output: 1_000_000 });
+  close(estimateCost(short, 'claude-haiku-5-5'), 0.501);
+  const long = tokens({ input: 1_000, cacheRead: 90_000, cacheWrite: 10_000, output: 1_000_000 });
+  close(estimateCost(long, 'claude-haiku-5-5'), 2.51125);
+});
+
+test('a decorated point-release id never falls back to its predecessor', () => {
+  for (const id of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-mythos-5-1', 'claude-haiku-5-5']) {
+    assert.deepEqual(pricingForModel(`us.anthropic.${id}[1m]`), pricingForModel(id), id);
+    assert.notDeepEqual(pricingForModel(id), pricingForModel(id.slice(0, -2)), id);
+  }
 });
 
 test('the context window comes from the model, so ctx% never falls as context grows', () => {
@@ -129,6 +164,7 @@ test('4.6-and-later models carry the 1M window', () => {
     'claude-sonnet-5',
     'claude-sonnet-4-6',
     'claude-fable-5-1',
+    'claude-haiku-5-5',
     'us.anthropic.claude-opus-4-8',
   ]) {
     assert.equal(contextWindowFor(model, 190_000), 1_000_000, model);

@@ -7,10 +7,8 @@ test('formatCurrency renders a normal USD amount', () => {
 });
 
 test('formatCurrency clamps a negative decimalPlaces instead of throwing', () => {
-  // A hand-edited settings.json can pass a negative value past the schema's 0-6 bounds;
-  // an unclamped toFixed(-1) would throw and take down every refresh.
   assert.doesNotThrow(() => formatCurrency(12.5, 'USD', -1));
-  assert.equal(formatCurrency(12.5, 'USD', -1), '$13'); // clamped to 0 fraction digits
+  assert.equal(formatCurrency(12.5, 'USD', -1), '$13');
 });
 
 test('formatCurrency handles an out-of-range high decimalPlaces', () => {

@@ -1,8 +1,3 @@
-// The opt-in "Explain with AI" advisor. Holds the user's own Anthropic API key in
-// VS Code Secret Storage and calls the Messages API directly with it — never the
-// Claude Code OAuth token. Sends only the usage digest (metadata) unless the user
-// has opted into including prompt samples, which is also confirmed per run.
-
 import * as vscode from 'vscode';
 import * as https from 'https';
 import { UsageRecord } from './types';
@@ -10,6 +5,7 @@ import { PlanLimits } from './limitsReader';
 import { filterMonth } from './dataLoader';
 import { hasSubscription } from './credentials';
 import { buildDigest, systemPrompt, collectPromptSamples } from './aiDigest';
+import { withRealPaths } from './paths';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const SECRET_KEY = 'claudeCodeUsageTracker.anthropicApiKey';
@@ -52,9 +48,7 @@ function postJson(url: string, headers: Record<string, string>, body: unknown): 
       }
       try {
         req?.destroy();
-      } catch {
-        /* already settling */
-      }
+      } catch {}
       action();
     };
     timer = setTimeout(() => finish(() => reject(new Error('request timed out'))), REQUEST_TIMEOUT_MS);
@@ -80,8 +74,6 @@ function postJson(url: string, headers: Record<string, string>, body: unknown): 
   });
 }
 
-// Pull the human-readable message out of an Anthropic error body
-// ({"type":"error","error":{"type":...,"message":...}}), if present.
 function apiErrorMessage(body: string): string | undefined {
   try {
     const parsed = JSON.parse(body);
@@ -92,10 +84,12 @@ function apiErrorMessage(body: string): string | undefined {
   }
 }
 
-function workspaceCwds(): string[] {
-  return (vscode.workspace.workspaceFolders ?? [])
-    .filter((folder) => folder.uri.scheme === 'file')
-    .map((folder) => folder.uri.fsPath);
+export function workspaceCwds(): string[] {
+  return withRealPaths(
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === 'file')
+      .map((folder) => folder.uri.fsPath)
+  );
 }
 
 function workspaceLabel(): string {
@@ -150,7 +144,6 @@ export class AiAdvisor {
     const model = cfg.get<string>('advisor.ai.model', DEFAULT_MODEL) || DEFAULT_MODEL;
     const includePrompts = cfg.get<boolean>('advisor.ai.includePrompts', false);
 
-    // Uses only this install's own key from Secret Storage, never a bundled key.
     let apiKey = await this.secrets.get(SECRET_KEY);
     if (!apiKey) {
       await this.setApiKey();
@@ -160,7 +153,6 @@ export class AiAdvisor {
       }
     }
 
-    // Fails closed: no file-backed folder means nothing to scope to, so no samples.
     const scopes = workspaceCwds();
     const wantPrompts = includePrompts && scopes.length > 0;
 
@@ -180,12 +172,9 @@ export class AiAdvisor {
     const samples = wantPrompts ? await collectPromptSamples(scopes) : [];
     const digest = buildDigest(monthRecords, limits, now, samples, subscription);
 
-    // Keyed on what was collected, not the setting: no samples, no prompt-coaching instruction.
     const sentPrompts = wantPrompts && samples.length > 0;
     const { result, creditError, authError } = await this.send(apiKey, model, sentPrompts, digest, subscription);
 
-    // A rejected key stays in Secret Storage, so every later click repeated the same 401 with no
-    // way forward except finding the command in the palette.
     if (!result.ok && authError) {
       // Not awaited: runAi holds the webview's spinner until explain() returns.
       const UPDATE = 'Update API key';
@@ -199,7 +188,6 @@ export class AiAdvisor {
       });
     }
 
-    // A credit-balance 400 means a valid key with no API credit — offer to open billing.
     if (!result.ok && creditError) {
       const BILLING = 'Open Billing';
       void vscode.window.showWarningMessage(
@@ -250,8 +238,7 @@ export class AiAdvisor {
       return { creditError: false, result: { ok: false, error: `Rate limited (429)${detail ? `: ${detail}` : '.'} Try again shortly.` } };
     }
     if (result.status !== 200) {
-      // A low/empty balance comes back as a 400 even though the key is valid — flag it
-      // so the caller can point the user to billing.
+      // A valid key with no credit also gets a 400; flag it so the caller can point to billing.
       const credit = !!detail && /credit balance/i.test(detail);
       if (credit) {
         return {

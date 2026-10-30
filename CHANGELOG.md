@@ -4,6 +4,45 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.6.1] - 2026-10-29
+
+### Fixed
+- **Each editor window now shows its own conversation's context %.** The figure came
+  from whichever Claude Code session wrote last, in any project, so with two projects
+  open each window could show the other one's conversation, and a script running
+  Claude Code elsewhere could take it over. It now comes from sessions run inside the
+  window's workspace folders. A window with no folder open still shows the latest session.
+- **A bad interval setting can no longer peg a CPU core.** A very large
+  `refreshIntervalSeconds` overflowed the timer, which then fired every millisecond,
+  and a non-number disabled the live-API throttle or broke the activity window. The
+  three numeric timing settings now fall back to their defaults when they aren't
+  numbers and are clamped to a range (refresh 5–3600 s, live API 60–3600 s, activity
+  window 1–300 min), which the Settings UI now shows as well. This matters because a
+  repository's `.vscode/settings.json` can set them.
+- **The extension no longer renews Claude Code's login itself.** When Claude Code's
+  access token had expired, the extension spent Claude Code's refresh token to get a
+  new one of its own, and discarded the replacement the server sent back. If the server
+  retires a refresh token once it is used, that could sign Claude Code out. The
+  extension now only reads the access token, never the refresh token, and while the
+  token is expired it shows the last reading until Claude Code renews it.
+- **Limit alerts no longer repeat every few minutes.** The reset time Anthropic reports
+  shifts by a fraction of a second on every fetch, and any later reset time was read as
+  a new window, so every alert you had already seen fired again. A new window now has
+  to move the reset time forward by more than half the window's length.
+- **Claude Opus 5.5 was priced as Opus 5, overstating its cost by close to 2×.** Opus
+  5.5 bills at $4 / $20 per million tokens with cache reads at $0.20, against Opus 5's
+  $5 / $25 and $0.50. Cache reads make up most of a Claude Code session, so the gap was
+  far larger than the headline rates suggest.
+- **Claude Haiku 5.5 is priced correctly**, including its two rate cards: $0.10 / $0.50
+  for a prompt of up to 100K tokens, $0.50 / $2.50 above that. It had been billed at
+  Haiku 4.5's $1 / $5. Its context % is now measured against its 1M window, not 200K.
+- **Claude Mythos 5.1 cache reads were billed at 4×** ($1.00 rather than $0.25 per million),
+  and **Claude Sonnet 5.5 cache reads at 2×** ($0.20 rather than $0.10).
+- **The Advisor's "cheaper model" savings now compare against Sonnet 5.5 and Haiku 5.5.**
+  It was still re-pricing your turns at Sonnet 4.6 / Haiku 4.5 rates, which overstated
+  the saving from switching Opus 5.5 to Sonnet several times over, and could hide the
+  tip entirely on Fable 5.1, whose cache reads cost less than Sonnet 4.6's.
+
 ## [1.6.0] - 2026-09-06
 
 ### Fixed

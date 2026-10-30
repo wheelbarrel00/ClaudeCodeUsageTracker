@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -69,6 +69,7 @@
           "type": "number",
           "default": 30,
           "minimum": 5,
+          "maximum": 3600,
           "description": "How often to refresh usage data, in seconds."
         },
         "claudeCodeUsageTracker.currency": {
@@ -97,6 +98,7 @@
           "type": "number",
           "default": 180,
           "minimum": 60,
+          "maximum": 3600,
           "description": "Minimum seconds between live usage-endpoint requests. The status bar still refreshes on its normal interval; this only throttles network calls to the limits API."
         },
         "claudeCodeUsageTracker.showOpusWeekly": {
@@ -148,6 +150,7 @@
           "type": "number",
           "default": 15,
           "minimum": 1,
+          "maximum": 300,
           "description": "Trailing window, in minutes, for the tooltip's burn-rate readout (new tokens/min, cached context re-reads/min, cost/min) and for deciding whether you are still actively burning. The pace projection is derived from your plan-limit utilization and the wall clock, not from this."
         },
         "claudeCodeUsageTracker.predictiveAlerts.warnThresholds": {

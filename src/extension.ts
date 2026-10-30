@@ -6,7 +6,8 @@ import { loadUsageRecords, summarize, filterToday, currentContext, claudeLogRoot
 import { loadPlanLimits, usageCachePath, PlanLimits } from './limitsReader';
 import { fetchLiveLimits } from './usageApi';
 import { PredictionController, PredictionView } from './prediction';
-import { AiAdvisor } from './aiAdvisor';
+import { AiAdvisor, workspaceCwds } from './aiAdvisor';
+import { numberSetting, REFRESH_INTERVAL_S, LIVE_API_MIN_INTERVAL_S } from './settings';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
@@ -26,8 +27,6 @@ let lastGoodLimitsAt = 0;
 let latestContext: ContextInfo | undefined;
 let latestPrediction: PredictionView | undefined;
 
-// Only bridge a transient limits gap for this long; past it we'd rather show
-// nothing than pin a stale, possibly-expired window forever.
 const LIMITS_FALLBACK_MAX_MS = 10 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -45,6 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(`${CONFIG_SECTION}.showDashboard`, () => dashboard.show(latestRecords, latestLimits)),
     vscode.commands.registerCommand(`${CONFIG_SECTION}.setAiApiKey`, () => void ai.setApiKey()),
     vscode.commands.registerCommand(`${CONFIG_SECTION}.clearAiApiKey`, () => void ai.clearApiKey()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => void refresh()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
         latestPrediction = predictor.update(latestRecords, latestLimits);
@@ -75,17 +75,13 @@ async function refresh(): Promise<void> {
       refreshAgain = false;
       const [records, limits] = await Promise.all([loadUsageRecords(), getPlanLimits()]);
       latestRecords = records;
-      // A transient live+cache gap (e.g. a 429 backoff) returns undefined; keep the
-      // last good limits for a short while so the status bar and ETA don't blank out
-      // mid-session. The "Updated X ago" tooltip still flags that the reading is
-      // stale, and the cap below stops us pinning an expired window indefinitely.
       if (limits) {
         lastGoodLimits = limits;
         lastGoodLimitsAt = Date.now();
       }
       const fallbackFresh = Date.now() - lastGoodLimitsAt <= LIMITS_FALLBACK_MAX_MS;
       latestLimits = limits ?? (fallbackFresh ? lastGoodLimits : undefined);
-      latestContext = currentContext(records);
+      latestContext = currentContext(records, Date.now(), workspaceCwds());
       latest = summarize(filterToday(records));
       latestPrediction = predictor.update(latestRecords, latestLimits);
       statusBar.render(latest, latestLimits, latestContext, latestPrediction);
@@ -100,12 +96,10 @@ async function getPlanLimits(): Promise<PlanLimits | undefined> {
   const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
   let live: PlanLimits | undefined;
   if (cfg.get<boolean>('useLiveApi', true)) {
-    const minInterval = Math.max(60, cfg.get<number>('liveApiMinIntervalSeconds', 180)) * 1000;
+    const minInterval = numberSetting(cfg.get('liveApiMinIntervalSeconds'), LIVE_API_MIN_INTERVAL_S) * 1000;
     try {
       live = await withTimeout(fetchLiveLimits(minInterval), 30000);
-    } catch {
-      // fall back to the on-disk cache
-    }
+    } catch {}
   }
   return freshest(live, await loadPlanLimits());
 }
@@ -117,7 +111,6 @@ function freshest(a?: PlanLimits, b?: PlanLimits): PlanLimits | undefined {
   return (b.fetchedAt ?? 0) > (a.fetchedAt ?? 0) ? b : a;
 }
 
-// Backstop so a stuck live fetch can never leave refreshInFlight wedged.
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('live fetch timed out')), ms);
@@ -136,10 +129,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 function scheduleRefresh(): void {
   stopRefresh();
-  const seconds = vscode.workspace
-    .getConfiguration(CONFIG_SECTION)
-    .get<number>('refreshIntervalSeconds', 30);
-  refreshTimer = setInterval(() => void refresh(), Math.max(5, seconds) * 1000);
+  const seconds = numberSetting(
+    vscode.workspace.getConfiguration(CONFIG_SECTION).get('refreshIntervalSeconds'),
+    REFRESH_INTERVAL_S
+  );
+  refreshTimer = setInterval(() => void refresh(), seconds * 1000);
 }
 
 function stopRefresh(): void {
@@ -172,8 +166,6 @@ function watchGlob(context: vscode.ExtensionContext, base: string, glob: string)
   );
 }
 
-// Trailing debounce with a max-wait: a steady stream of session-log writes would otherwise keep
-// pushing the timer out and starve live updates down to the interval timer.
 const WATCH_DEBOUNCE_MS = 750;
 const WATCH_MAX_WAIT_MS = 5000;
 let watchFirstEventAt = 0;
@@ -181,7 +173,7 @@ let watchFirstEventAt = 0;
 function scheduleWatchRefresh(): void {
   if (watchDebounce) {
     if (Date.now() - watchFirstEventAt >= WATCH_MAX_WAIT_MS) {
-      return; // let the pending timer fire despite continuing events
+      return;
     }
     clearTimeout(watchDebounce);
   } else {

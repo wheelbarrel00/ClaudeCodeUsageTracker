@@ -17,10 +17,10 @@ export interface ScopedLimit extends LimitWindow {
 export interface ExtraUsage {
   isEnabled: boolean;
   usedCredits?: number; // minor units (e.g. cents)
-  monthlyLimit?: number; // minor units
-  utilization?: number; // 0-100
+  monthlyLimit?: number;
+  utilization?: number;
   currency?: string;
-  decimalPlaces?: number; // minor-unit exponent
+  decimalPlaces?: number;
 }
 
 export interface PlanLimits {
@@ -33,28 +33,20 @@ export interface PlanLimits {
 
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
-// One full weekly period: past it every window has necessarily rolled over at least once, so
-// nothing in the payload can describe the present.
 const MAX_PAYLOAD_AGE_MS = SEVEN_DAY_MS;
 
-// Utilization is 0 only at the instant a window rolls over, so reporting a rolled-over
-// window as empty is honest solely as a bridge from that reset to the next fetch.
 const ROLLOVER_GRACE_MS = 15 * 60 * 1000;
 
-// A future timestamp is clock skew, not freshness: a negative age exceeds no limit and would
-// clear every gate below. Matches the skew tolerance in usageApi's shared-cache reader.
+// A future timestamp is clock skew: its negative age would clear every gate below.
 const CLOCK_SKEW_MS = 60 * 1000;
 
 export type SeverityBand = 'normal' | 'warning' | 'error';
 
-// One severity->color rule for both the status bar and dashboard. Bands come from the user's warn
-// thresholds (warning = first, error = last); the API severity only escalates, unknown strings ignored.
 export function severityBand(window: LimitWindow, thresholds: number[]): SeverityBand {
   if (window.severity === 'critical' || window.severity === 'error') {
     return 'error';
   }
   const shown = Math.round(window.utilization);
-  // Thresholds can be emptied entirely from settings; an exhausted window is never green.
   if (shown >= 100) {
     return 'error';
   }
@@ -96,9 +88,6 @@ export async function loadPlanLimits(): Promise<PlanLimits | undefined> {
   return mapUsageData(raw?.data, fetchedAt);
 }
 
-// Maps the raw usage payload (the `data` object Claude Code writes to usage-cache.json, which is
-// also the body the live /api/oauth/usage endpoint returns) into PlanLimits. Pure and I/O-free so
-// both the cache reader and the live fetcher share one parser.
 export function mapUsageData(data: any, fetchedAt: number): PlanLimits | undefined {
   if (!data || typeof data !== 'object') {
     return undefined;
@@ -182,8 +171,6 @@ function parseExtraUsage(raw: any): ExtraUsage | undefined {
   };
 }
 
-// Formats extra-usage spend as "$3.50" or "$3.50 / $50.00" (used / monthly cap).
-// Anthropic reports money as minor units + an exponent (decimal_places).
 export function formatExtraSpend(extra: ExtraUsage): string {
   if (extra.usedCredits === undefined) {
     return '';
@@ -203,10 +190,7 @@ export function formatExtraSpend(extra: ExtraUsage): string {
   return `${money(extra.usedCredits)}${cap}`;
 }
 
-// A window whose reset time has passed rolled over since the data was fetched, so the old
-// utilization no longer applies. "Empty" holds only while both the rollover and the fetch are
-// recent (see ROLLOVER_GRACE_MS); beyond that it is dropped rather than guessed at 0%.
-// rollMs > 0 projects the weekly boundary; rollMs = 0 clears the 5-hour window's unknown reset.
+// rollMs > 0 projects the next weekly boundary; 0 clears the 5-hour window's unknown reset.
 function applyExpiry<T extends LimitWindow>(
   window: T | undefined,
   now: number,
