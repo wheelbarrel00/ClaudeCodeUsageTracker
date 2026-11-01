@@ -35,10 +35,10 @@ export function buildDigest(
 
   if (subscription) {
     lines.push(
-      'Billing: this user is on a Claude subscription (flat monthly fee with 5-hour / weekly session limits) ' +
+      'Billing: this user is on a Claude subscription (flat monthly fee with plan usage limits) ' +
         'and does NOT pay per token. Every dollar figure below is estimated pay-as-you-go API-equivalent cost — ' +
         'a gauge of usage intensity, not their bill. Frame advice around stretching the subscription and staying ' +
-        'under the session limits, not around lowering a bill.'
+        'under the plan limits, not around lowering a bill.'
     );
   }
 
@@ -68,10 +68,20 @@ export function buildDigest(
   const hot = sessions.filter((s) => s.peakContextPct >= 80).length;
   lines.push(`Sessions: ${sessions.length} this month; ${hot} peaked above 80% context.`);
 
-  if (limits?.fiveHour || limits?.sevenDay) {
-    const five = limits?.fiveHour ? `${Math.round(limits.fiveHour.utilization)}%` : 'n/a';
-    const week = limits?.sevenDay ? `${Math.round(limits.sevenDay.utilization)}%` : 'n/a';
-    lines.push(`Plan limits now: 5-hour ${five}, weekly ${week}.`);
+  const planLimits: string[] = [];
+  if (limits?.fiveHour) {
+    planLimits.push(`5-hour ${Math.round(limits.fiveHour.utilization)}%`);
+  } else if (limits?.hasSessionLimit) {
+    planLimits.push('5-hour n/a');
+  }
+  if (limits?.sevenDay) {
+    planLimits.push(`weekly ${Math.round(limits.sevenDay.utilization)}%`);
+  }
+  for (const scoped of limits?.scoped ?? []) {
+    planLimits.push(`${scoped.label} weekly ${Math.round(scoped.utilization)}%`);
+  }
+  if (planLimits.length) {
+    lines.push(`Plan limits now: ${planLimits.join(', ')}.`);
   }
 
   const insights = analyze({ records: monthRecords, sessions, now, subscription }, usd);
@@ -101,10 +111,10 @@ export function systemPrompt(includePrompts: boolean, subscription = false): str
     'subagents. Be concise — a short prioritized list, not an essay. Do not invent numbers that are not provided. ' +
     'End with the single highest-impact change to make next.';
   const billing = subscription
-    ? ' IMPORTANT: this user is on a flat-fee Claude subscription with 5-hour / weekly session limits and does NOT ' +
+    ? ' IMPORTANT: this user is on a flat-fee Claude subscription with plan usage limits and does NOT ' +
       'pay per token — the dollar figures are estimated API-equivalent usage, not a bill. Do NOT tell them they are ' +
       'spending or will be billed that money or frame savings as cash back. Frame everything around stretching their ' +
-      'subscription and staying under their session limits; dollars are only a gauge of usage intensity.'
+      'subscription and staying under their plan limits; dollars are only a gauge of usage intensity.'
     : '';
   const prompts = includePrompts
     ? ' Some recent user prompts are included; also give brief, concrete tips to write tighter, more effective prompts based on them.'

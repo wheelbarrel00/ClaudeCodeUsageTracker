@@ -11,6 +11,7 @@ import {
   isExpired,
   readOAuth,
   readOAuthAsync,
+  hasSubscription,
   OAuthCredentials,
   __resetCredentialCacheForTests,
   __setKeychainReaderForTests,
@@ -188,6 +189,23 @@ test('parseCredentials returns undefined when the access token is missing', () =
 
 test('parseCredentials returns undefined for malformed JSON', () => {
   assert.equal(parseCredentials('not json'), undefined);
+});
+
+test('a per-model limit alone proves a subscription', () => {
+  const dir = tempConfigDir();
+  const fable = { label: 'Fable', utilization: 0, severity: 'normal' };
+  __resetCredentialCacheForTests();
+  __setKeychainReaderForTests(async () => undefined);
+  try {
+    withEnv({ CLAUDE_CONFIG_DIR: dir, CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined }, () => {
+      assert.equal(hasSubscription({ scoped: [], hasSessionLimit: false }), false);
+      assert.equal(hasSubscription({ scoped: [fable], hasSessionLimit: false }), true);
+    });
+  } finally {
+    __setKeychainReaderForTests();
+    __resetCredentialCacheForTests();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('readOAuthAsync reads the file first and never spawns the Keychain reader when a file exists', async () => {

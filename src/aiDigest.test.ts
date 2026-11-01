@@ -57,6 +57,34 @@ test('systemPrompt warns against bill framing only on a subscription', () => {
   assert.match(systemPrompt(false, true), /not pay per token/i);
 });
 
+test('the subscription framing never assumes a 5-hour limit', () => {
+  const records = [record({ input: 1_000_000, output: 100 })];
+  assert.doesNotMatch(buildDigest(records, undefined, JUNE_15, [], true), /5-hour|session limit/i);
+  assert.doesNotMatch(systemPrompt(false, true), /5-hour|session limit/i);
+});
+
+test('the digest lists only the plan limits that exist', () => {
+  const records = [record({ input: 1_000_000, output: 100 })];
+  const week = { utilization: 42.4, severity: 'normal' };
+  const five = { utilization: 7.6, severity: 'normal' };
+  const both = buildDigest(records, { fiveHour: five, sevenDay: week, scoped: [], hasSessionLimit: true }, JUNE_15);
+  assert.match(both, /Plan limits now: 5-hour 8%, weekly 42%\./);
+  const weeklyOnly = buildDigest(records, { sevenDay: week, scoped: [], hasSessionLimit: false }, JUNE_15);
+  assert.match(weeklyOnly, /Plan limits now: weekly 42%\./);
+  assert.doesNotMatch(weeklyOnly, /n\/a/);
+  assert.doesNotMatch(buildDigest(records, { scoped: [], hasSessionLimit: false }, JUNE_15), /Plan limits now/);
+  const fable = { label: 'Fable', utilization: 94.6, severity: 'normal' };
+  const withFable = buildDigest(records, { sevenDay: week, scoped: [fable], hasSessionLimit: false }, JUNE_15);
+  assert.match(withFable, /Plan limits now: weekly 42%, Fable weekly 95%\./);
+});
+
+test('a 5-hour limit with no current reading is reported as unavailable, not left out', () => {
+  const records = [record({ input: 1_000_000, output: 100 })];
+  const week = { utilization: 42.4, severity: 'normal' };
+  const digest = buildDigest(records, { sevenDay: week, scoped: [], hasSessionLimit: true }, JUNE_15);
+  assert.match(digest, /Plan limits now: 5-hour n\/a, weekly 42%\./);
+});
+
 test('extractUserPrompt returns a clean, truncated typed prompt', () => {
   const line = JSON.stringify({ type: 'user', message: { role: 'user', content: '  refactor   the\nloader  ' } });
   assert.equal(extractUserPrompt(line), 'refactor the loader');

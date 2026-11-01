@@ -9,11 +9,15 @@
 </p>
 
 <p align="center">
+  <b>Now supports the Ultra plan.</b> No 5&#8209;hour limit on your account? The weekly limit takes over the live pace meter, and your Fable limit gets its own warnings.
+</p>
+
+<p align="center">
   <img src="images/statusbar.png" alt="Status bar showing plan limits with a live pace meter, context, cost, and tokens" width="460" />
 </p>
 
 <p align="center">
-  <sub>At a glance in the status bar &mdash; plan limits, context, cost, and tokens. The pace meter <code>5h 42% &rarr; 53%</code> reads &ldquo;at your current rate you're on track to finish the 5&#8209;hour window at <b>53%</b>.&rdquo;</sub>
+  <sub>At a glance in the status bar &mdash; plan limits, context, cost, and tokens. The pace meter <code>5h 42% &rarr; 53%</code> reads &ldquo;at your current rate you're on track to finish the 5&#8209;hour window at <b>53%</b>.&rdquo; With no 5&#8209;hour limit, such as on a verified Ultra account, the weekly limit shows it instead: <code>wk 10% &rarr; 19%</code>.</sub>
 </p>
 
 <p align="center">
@@ -25,21 +29,25 @@
 </p>
 
 <p align="center">
-  <img src="images/stats.png" alt="Claude Code Usage dashboard with the Advisor panel" width="900" />
+  <img src="images/stats.png" alt="Claude Code Usage dashboard on a verified Ultra account, with weekly and Fable limits and the Advisor panel" width="900" />
+</p>
+
+<p align="center">
+  <sub>The dashboard on a verified Ultra account: weekly and Fable limits with no 5&#8209;hour bar, ranked Advisor tips, then your usage by day, model, project, branch, and session. Project and session names here are placeholders.</sub>
 </p>
 
 ## Features
 
-- **Status bar** &mdash; plan-limit utilization (5-hour + weekly, optional weekly-Opus), each led by a Claude sunburst that turns green / yellow / red at your own warning thresholds (`predictiveAlerts.warnThresholds`, 75% / 90% by default), plus the current session's context-window fill, today's estimated cost, and token count. Each segment toggles independently. Click any of them to open the dashboard.
-- **Plan limits** &mdash; real 5h / weekly usage with reset times and per-model scoped windows, shown as bars in the dashboard. Fetched live from Anthropic's usage endpoint (the same call Claude Code makes) so the numbers stay current even mid-session. Multiple open editor windows share a single fetch &mdash; and a single rate-limit backoff &mdash; so opening more windows won't push you onto a stale reading. A reading that has aged out is **hidden rather than guessed at**: the extension never presents an old window as a fresh `0%`.
-- **Predictive alerts** &mdash; forecasts when you'll hit a limit and warns you before you do. The 5-hour limit gets a live **pace meter**: `5h 42% → 53%` means *at your current rate you're on track to finish the 5-hour window at 53%* (it climbs toward 100% as you push harder, so you can see at a glance whether you're cruising or about to run out). It appears from early in the window &mdash; damped toward your current utilization at first, so a thin early slice can't project an alarming number &mdash; and stays visible while you're idle. Near 100% it reads `· on pace` rather than committing to a knife-edge number, and that verdict is judged on the *undamped* pace, so a heavy early burn is never reported as on pace. The weekly limit shows a time-to-limit **ETA** only when you're genuinely on track to breach it. **Notifications** fire at configurable thresholds (75% / 90%) and when your pace is clearly set to breach a window before it resets, and the tooltip shows your live **burn rate**, split into new work versus cached context re-reads (a long session re-reads its whole context every turn, which otherwise dominates the figure and makes it meaningless). An optional, off-by-default **model-cost advisor** suggests a cheaper model when you're burning an expensive one on routine turns. On by default and 100% local &mdash; configure under `predictiveAlerts.*`.
-- **Extra usage (pay-as-you-go)** &mdash; optional, **off by default**: when your account has pay-as-you-go enabled, your spend beyond plan limits is shown in the status bar (`extra $3.50 / $50.00`), the tooltip, and the dashboard. Turn on with `showExtraUsage`.
+- **Status bar** &mdash; plan-limit utilization (weekly, the 5-hour limit if your plan has one, and optionally your per-model weekly limit), each led by a Claude sunburst that turns green / yellow / red at your own warning thresholds (`predictiveAlerts.warnThresholds`, 75% / 90% by default), plus the current session's context-window fill, today's estimated cost, and token count. The limits, context, cost, and token readouts each have their own toggle. Click any of them to open the dashboard.
+- **Plan limits** &mdash; real usage for each limit your plan has (5-hour, weekly, and per-model weekly such as Fable) with reset times, shown as bars in the dashboard. Which limits apply comes from Anthropic, so a verified Ultra account, which has no 5-hour limit, simply doesn't show one. Fetched live from Anthropic's usage endpoint (the same call Claude Code makes) so the numbers stay current even mid-session. Multiple open editor windows share a single fetch &mdash; and a single rate-limit backoff &mdash; so opening more windows won't push you onto a stale reading. A reading that has aged out is **hidden rather than guessed at**: the extension never presents an old window as a fresh `0%`.
+- **Predictive alerts** &mdash; forecasts when you'll hit a limit and warns you before you do. The 5-hour limit gets a live **pace meter**: `5h 42% → 53%` means *at your current rate you're on track to finish the 5-hour window at 53%* (it climbs toward 100% as you push harder, so you can see at a glance whether you're cruising or about to run out). It appears from early in the window &mdash; damped toward your current utilization at first, so a thin early slice can't project an alarming number &mdash; and stays visible while you're idle. Near 100% it reads `· on pace` rather than committing to a knife-edge number, and that verdict is judged on the *undamped* pace, so a heavy early burn is never reported as on pace. The weekly limit shows a time-to-limit **ETA** only when you're genuinely on track to breach it &mdash; unless your plan has no 5-hour limit, in which case the weekly limit gets the pace meter instead (`wk 10% → 22%`). **Notifications** fire at configurable thresholds (75% / 90%), per-model weekly limits such as Fable included, and when your pace is clearly set to breach the 5-hour or weekly limit before it resets, and the tooltip shows your live **burn rate**, split into new work versus cached context re-reads (a long session re-reads its whole context every turn, which otherwise dominates the figure and makes it meaningless). An optional, off-by-default **model-cost advisor** suggests a cheaper model when you're burning an expensive one on routine turns. On by default and 100% local &mdash; configure under `predictiveAlerts.*`.
+- **Extra usage (pay-as-you-go)** &mdash; optional, **off by default**: when your account has extra usage turned on (claude.ai now calls it *usage credits*), your spend beyond plan limits is shown in the status bar (`extra $3.50 / $50.00`), the tooltip, and the dashboard. Turn on with `showExtraUsage`.
 - **Context window** &mdash; the latest request's prompt size as a percent of the model's window (like `/context`), taken from the Claude Code session running in this window's workspace, so each editor window shows its own conversation. The window comes from the model &mdash; 1M on Sonnet 4.6 / Opus 4.6 / Haiku 5.5 and later, 200K on Haiku 4.5 and earlier models &mdash; and subagent turns are excluded, so the figure tracks the conversation you're in instead of jumping every time a subagent runs. Their tokens still count everywhere spend is reported.
-- **Advisor** &mdash; a panel in the dashboard with ranked, money-quantified tips to cut waste this month: routing routine turns to a cheaper model (with the estimated saving), long sessions that re-processed context uncached, sessions running near the context limit, and a month-end spend forecast. **Subscription-aware:** on a Pro/Max plan (where you pay a flat fee, not per token) it labels the dollar figures as *estimated API-equivalent usage* &mdash; a gauge, not a bill &mdash; and frames the advice around your 5-hour / weekly session limits. Computed entirely from your local usage data &mdash; no network call, no API key, and your prompts never leave your machine. On by default; turn it off with `advisor.enabled`. An optional **Explain with AI** button turns those signals into written, prioritized coaching &mdash; it calls Anthropic with **your own API key** &mdash; a pay-as-you-go key from the [Anthropic Console](https://console.anthropic.com/settings/keys), separate from your Claude Code subscription &mdash; stored in VS Code Secret Storage (set via the *Set Anthropic API Key* command, which links you straight to the console), sends only the usage summary by default, and never uses your Claude Code login. Prompt text is included only if you opt in (`advisor.ai.includePrompts`) and confirm, and only from the folders open in your window &mdash; never from your other projects.
-- **Dashboard** &mdash; Today / This Month / All Time cards with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration) &mdash; each footed with a **totals** row (messages, tokens, cost).
+- **Advisor** &mdash; a panel in the dashboard with ranked, money-quantified tips to cut waste this month: routing routine turns to a cheaper model (with the estimated saving), long sessions that re-processed context uncached, sessions running near the context limit, and a month-end spend forecast. **Subscription-aware:** on a subscription such as Pro, Max or Ultra (where you pay a flat fee, not per token) it labels the dollar figures as *estimated API-equivalent usage* &mdash; a gauge, not a bill &mdash; and frames the advice around your plan limits. Computed entirely from your local usage data &mdash; no network call, no API key, and your prompts never leave your machine. On by default; turn it off with `advisor.enabled`. An optional **Explain with AI** button turns those signals into written, prioritized coaching &mdash; it calls Anthropic with **your own API key** &mdash; a key from the [Claude Console](https://platform.claude.com/settings/keys), separate from your Claude Code usage limits &mdash; stored in VS Code Secret Storage (set via the *Set Anthropic API Key* command, which links you straight to the console), sends only the usage summary by default, and never uses your Claude Code login. Prompt text is included only if you opt in (`advisor.ai.includePrompts`) and confirm, and only from the folders open in your window &mdash; never from your other projects.
+- **Dashboard** &mdash; Today / This Month / All Time cards (All Time reaches as far back as your local logs go) with a full input / output / cache-write / cache-read token breakdown, cache-hit rate, and a cost-composition bar. Below them, sortable breakdowns: **by model**, **by project** (grouped by git repo, folder, or path), **by git branch**, and **by session** (titles, peak context, active-time duration) &mdash; each footed with a **totals** row (messages, tokens, cost).
 - **Trend** &mdash; a bar chart of usage over time: daily across the current month or monthly across all time, switchable between cost and tokens, with the current day highlighted and a running total / peak summary. Empty days and months are filled in, so gaps in usage stay visible.
-- **Live updates** &mdash; file watchers over your logs and the limits cache refresh the moment Claude Code writes, with a timer as a fallback.
-- **Cost estimates** &mdash; from a per-model price table, with prefix matching for dated and suffixed model ids.
+- **Live updates** &mdash; a file watcher over your logs refreshes the figures the moment Claude Code writes, with a timer as a fallback. Plan limits are fetched from Anthropic at most once every 3 minutes by default (`liveApiMinIntervalSeconds`).
+- **Cost estimates** &mdash; from a per-model price table covering the current Fable, Opus, Sonnet, and Haiku models, including fast mode and 1-hour cache writes, and handling dated, suffixed, and Bedrock-prefixed model ids.
 
 ## How it works
 
@@ -57,7 +65,7 @@ Plan limits come from a second source. By default the extension fetches them
 **live** from Anthropic's usage endpoint (`GET /api/oauth/usage` on
 `api.anthropic.com`) &mdash; the same call Claude Code makes &mdash; authenticated
 with Claude Code's OAuth token (from `~/.claude/.credentials.json`, or the login
-Keychain on macOS, where Claude Code keeps it instead). This keeps the 5-hour and weekly
+Keychain on macOS, where Claude Code keeps it instead). This keeps your plan-limit
 figures current even during a long session. If the live request fails, the extension
 falls back to Claude Code's on-disk cache (`~/.claude/usage-cache.json`) &mdash;
 though recent Claude Code versions no longer refresh that file, so in practice the
@@ -90,9 +98,9 @@ The **Advisor** panel is computed entirely on-device. Its optional **Explain wit
 AI** button is the one feature that sends data off-device, and only when you click
 it: it POSTs your usage summary to `api.anthropic.com/v1/messages` authenticated
 with **your own** Anthropic API key &mdash; created at
-[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
-(a pay-as-you-go API key, separate from and billed independently of your Claude Code
-subscription) and kept in VS Code Secret Storage, never the Claude Code OAuth token. By default only metadata is sent &mdash; token counts,
+[platform.claude.com/settings/keys](https://platform.claude.com/settings/keys)
+(an API key, separate from your Claude Code subscription and its usage limits)
+and kept in VS Code Secret Storage, never the Claude Code OAuth token. By default only metadata is sent &mdash; token counts,
 costs, cache figures, model names, and the locally-computed tips, never any prompt
 or response text. Prompt text is included only if you both turn on
 `advisor.ai.includePrompts` and confirm the modal each time, in which case a small,
@@ -136,10 +144,17 @@ is a coin flip that flips back on the next refresh. The **weekly** window stays 
 shows a time-to-limit ETA only once you're on a trustworthy track to breach it before reset
 (its figure moves over days, so a constant readout would be noise).
 
-Threshold and pace-based **warnings** fire once per window (re-arming when it resets), only
-while you're actually burning, and &mdash; for the pace warning &mdash; only once you're
-clear of that same on-pace band, so a popup never contradicts the meter. It all runs on the
-figures already on screen and makes no extra network calls.
+The exception is a plan with no 5-hour limit, such as a verified Ultra account. The weekly
+limit is then the only one you have, so it takes over the pace meter (`wk 10% → 22%`), with
+the same rules on a weekly scale: it appears about 17 hours into the week and firms up by
+the half-mark. This depends on whether your plan has the limit, not on whether a reading
+happens to be available, so a stale 5-hour figure on another plan won't switch it on.
+
+Threshold and pace-based **warnings** fire once per window (re-arming when it resets). The
+pace warning also waits until you're actually burning and clear of that same on-pace band,
+so a popup never contradicts the meter. It covers the 5-hour and weekly limits; per-model
+weekly limits get threshold warnings only. It all runs on the figures already on screen and
+makes no extra network calls.
 
 <p align="center">
   <img src="images/predictive-warning.png" alt="Predictive limit warning notification" width="560" />
@@ -151,8 +166,10 @@ figures already on screen and makes no extra network calls.
 
 ## Getting started
 
-1. **Install** from the VS Code Marketplace or [Open VSX](https://open-vsx.org), or
-   download a `.vsix` from the
+1. **Install** from the
+   [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=wheelbarrel00.claude-code-usage-tracker-wb00)
+   or [Open VSX](https://open-vsx.org/extension/wheelbarrel00/claude-code-usage-tracker-wb00),
+   or download a `.vsix` from the
    [Releases](https://github.com/wheelbarrel00/ClaudeCodeUsageTracker/releases) page
    and run `code --install-extension <file>.vsix` (or, in Cursor,
    `cursor --install-extension <file>.vsix`).
@@ -174,26 +191,26 @@ figures already on screen and makes no extra network calls.
 | Setting | Default | Description |
 | --- | --- | --- |
 | `claudeCodeUsageTracker.refreshIntervalSeconds` | `30` | How often to refresh usage data, in seconds (5–3600). |
-| `claudeCodeUsageTracker.currency` | `USD` | Currency code for cost formatting. |
-| `claudeCodeUsageTracker.decimalPlaces` | `2` | Decimal places for cost figures. |
-| `claudeCodeUsageTracker.showLimits` | `true` | Show 5-hour and weekly plan-limit utilization. |
+| `claudeCodeUsageTracker.currency` | `USD` | Currency code for cost formatting. This changes the symbol only; amounts aren't converted. |
+| `claudeCodeUsageTracker.decimalPlaces` | `2` | Decimal places for cost figures (0–6). |
+| `claudeCodeUsageTracker.showLimits` | `true` | Show your plan limits: the weekly limit, plus the 5-hour limit if your plan has one. |
 | `claudeCodeUsageTracker.useLiveApi` | `true` | Fetch current limits live from Anthropic's usage endpoint (using the local OAuth token); falls back to the cache file on failure, and to the reading shared between your open windows. Turn off to make no network requests. |
 | `claudeCodeUsageTracker.liveApiMinIntervalSeconds` | `180` | Minimum seconds between live usage-endpoint requests (60–3600). Throttles network calls only; the status bar still refreshes on its normal interval. |
-| `claudeCodeUsageTracker.showOpusWeekly` | `false` | Also append the weekly Opus limit (`opus NN%`) when a live Opus window exists. |
+| `claudeCodeUsageTracker.showModelWeekly` | `false` | Also show your most-used per-model weekly limit (e.g. `fable NN%`) when your plan has one. Replaces `showOpusWeekly`, which still works. |
 | `claudeCodeUsageTracker.showContext` | `true` | Show the current session's context-window fill (like `/context`). |
 | `claudeCodeUsageTracker.showCost` | `true` | Show today's estimated cost. |
 | `claudeCodeUsageTracker.showTokens` | `true` | Show today's token count. |
 | `claudeCodeUsageTracker.showExtraUsage` | `false` | Show pay-as-you-go extra usage (spend beyond plan limits) in the status bar and dashboard. Only appears when your account has extra usage enabled. |
-| `claudeCodeUsageTracker.projectGroupingMode` | `git` | Group the dashboard's By project breakdown by git repo, folder, or path. |
+| `claudeCodeUsageTracker.projectGroupingMode` | `git` | Group the dashboard's By project breakdown by git repo (`git`), folder (`folder`), or full path (`flat`). |
 | `claudeCodeUsageTracker.advisor.enabled` | `true` | Show the Advisor panel in the dashboard: ranked, money-quantified tips to cut waste (cheaper-model routing, cache reuse, context bloat, spend forecast). Fully local; nothing leaves your machine. |
 | `claudeCodeUsageTracker.advisor.ai.model` | `claude-sonnet-5` | Model used by the Advisor's "Explain with AI" button (called with your own API key). Sonnet 5 is a capable, low-cost default; use an Opus id such as `claude-opus-5` for deeper analysis at higher cost. |
 | `claudeCodeUsageTracker.advisor.ai.includePrompts` | `false` | When using "Explain with AI", also send a small, truncated sample of your recent prompts so it can coach on prompt quality. Only prompts from the folders open in this window are ever included. Off by default (metadata only); you confirm each time prompts would be included. |
-| `claudeCodeUsageTracker.predictiveAlerts.enabled` | `true` | Master switch for predictive alerts (ETA, warnings, advisor). |
+| `claudeCodeUsageTracker.predictiveAlerts.enabled` | `true` | Master switch for predictive alerts (forecasts, warnings, and the model-cost advisor). |
 | `claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta` | `true` | Show the 5-hour pace meter (projected end-of-window %, e.g. `5h 23% → 45%`, or `· on pace` near 100%) in the status bar. Shown from early in the window (damped toward your current % at first, firming up by the half-mark) and stays visible while idle. |
-| `claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta` | `true` | Show the weekly ETA, but only when you're on track to hit the weekly limit before it resets. |
-| `claudeCodeUsageTracker.predictiveAlerts.warnThresholds` | `[75, 90]` | Utilization percentages that fire a warning notification (once per window each). At least one is required; a window at 100% is always shown in the error colour regardless. |
-| `claudeCodeUsageTracker.predictiveAlerts.predictBreach` | `true` | Also warn when your current pace projects you'll hit a limit before it resets. |
-| `claudeCodeUsageTracker.predictiveAlerts.windowMinutes` | `15` | Trailing window, in minutes (1–300), for the burn-rate readout in the tooltip (new tokens/min, cached context re-reads/min, cost/min). |
+| `claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta` | `true` | Show the weekly forecast: an ETA only when you're on track to hit the weekly limit before it resets, or the always-on pace meter if your plan has no 5-hour limit. |
+| `claudeCodeUsageTracker.predictiveAlerts.warnThresholds` | `[75, 90]` | Utilization percentages that fire a warning notification (once per window each), for every plan limit including per-model weekly ones. At least one is required; a window at 100% is always shown in the error colour regardless. |
+| `claudeCodeUsageTracker.predictiveAlerts.predictBreach` | `true` | Also warn when your current pace projects you'll hit your 5-hour or weekly limit before it resets. Per-model weekly limits get threshold warnings only. |
+| `claudeCodeUsageTracker.predictiveAlerts.windowMinutes` | `15` | Trailing window, in minutes (1–300), for the burn-rate readout in the tooltip (new tokens/min, cached context re-reads/min, cost/min) and for deciding whether you're still actively burning. |
 | `claudeCodeUsageTracker.predictiveAlerts.modelAdvisor.enabled` | `false` | One-time, dismissible hint suggesting a cheaper model when recent turns spend heavily on an expensive one for little output. |
 
 ## Troubleshooting
@@ -204,7 +221,7 @@ extension reads the JSONL transcripts it writes under `~/.claude/projects`. If
 that folder doesn't exist or has no sessions yet, there's nothing to show.
 
 **Plan-limit bars don't appear.**
-The 5-hour / weekly figures are fetched live from Anthropic using Claude Code's
+Plan-limit figures are fetched live from Anthropic using Claude Code's
 OAuth token (from `~/.claude/.credentials.json`, or the login Keychain on macOS).
 Run Claude Code once and sign in so those credentials exist. Note that recent
 Claude Code versions no longer refresh `~/.claude/usage-cache.json`, so the live
@@ -217,11 +234,19 @@ an old reading presented as `0%` used to look exactly like a real reset. With se
 editor windows open, one window's fetch is shared with the rest (as is a rate-limit
 backoff), so no window gets throttled onto a stale reading.
 
+**There's no `5h` item &mdash; or I'm on Ultra and there still is one.**
+The extension shows the limits Anthropic reports for your account. Verified Ultra
+accounts have no 5-hour limit, and until an account is verified it has a temporary one.
+Anthropic verifies accounts automatically, and verifying a phone number at checkout
+doesn't remove the limit. To check, open **Settings > Usage** on claude.ai: if there's a
+*Current session* bar, the limit applies to you and the `5h` item is real. When the bar
+goes, the item goes with it and the weekly limit takes over the pace meter.
+
 **Extra usage (pay-as-you-go) doesn't show.**
 It is **off by default** &mdash; turn on `showExtraUsage`. Even then it only
-appears when your Anthropic account actually has pay-as-you-go enabled (the API
-reports `extra_usage.is_enabled`); if your account has no extra usage, there is
-nothing to display.
+appears when your Anthropic account actually has it enabled (the API reports
+`extra_usage.is_enabled`; on claude.ai it's the *usage credits* switch under
+**Settings > Usage**). If it's off, there is nothing to display.
 
 **Usage history is missing older days or months.**
 Claude Code automatically deletes conversation logs older than `cleanupPeriodDays`
@@ -254,7 +279,9 @@ workspace. If it genuinely doesn't load, check that you're on 1.6.0 or later. It
 **Numbers look stale.**
 The extension refreshes when Claude Code writes to its logs, with a timer
 fallback (`refreshIntervalSeconds`). To force an update, run **Claude Code Usage
-Tracker: Refresh** from the Command Palette.
+Tracker: Refresh** from the Command Palette. Plan limits still wait out
+`liveApiMinIntervalSeconds` (3 minutes by default) between fetches, so they can trail
+your logs by that long.
 
 **No forecast (`→ 48%`, `· on pace`, or `· ~38m`) shows next to a limit.**
 The **5-hour pace meter** appears once roughly a tenth of the window has elapsed (and the
@@ -263,7 +290,8 @@ because a projection divides by a small elapsed time and amplifies a single tick
 alarming number. The **weekly** ETA is shown only when you're on a trustworthy track to breach the
 weekly limit before it resets (its figure moves over days, so a constant readout would be
 noise) &mdash; the rest of the time it's just `wk 9%`, which is expected, not a missing
-reading. Turn either off with `predictiveAlerts.showFiveHourEta` /
+reading. If your plan has no 5-hour limit, the weekly gets the pace meter instead, which
+appears about 17 hours into the week. Turn either off with `predictiveAlerts.showFiveHourEta` /
 `predictiveAlerts.showWeeklyEta`, or the whole feature with `predictiveAlerts.enabled`.
 
 **The pace meter says `· on pace` instead of a percentage.**
@@ -283,7 +311,8 @@ whether "on pace" is honest.
 Warnings need `predictiveAlerts.enabled` on (the default). A threshold warning fires
 once when a window crosses each value in `predictiveAlerts.warnThresholds` (75% / 90%
 by default) and re-arms when the window resets &mdash; so if you've already crossed it
-this window, it won't fire again until reset. The predictive "you'll hit it before
+this window, it won't fire again until reset. Reloading the editor clears that memory, so
+a limit still over a threshold warns once more. The predictive "you'll hit it before
 reset" warning needs `predictiveAlerts.predictBreach` on, and fires only once the window
 is at least half over, you're actively burning, and your projection is clear of the
 on-pace band &mdash; so a popup can never contradict a meter reading `· on pace`.
@@ -297,31 +326,38 @@ up when recent turns show heavy spend on an expensive model for little output, a
 once every few hours, and it has a **Don't show again** button.
 
 **"Explain with AI" asks for an API key — where do I get one?**
-That button uses the Anthropic **API** (pay-as-you-go), which is **separate** from
-your Claude Code / claude.ai Pro/Max subscription &mdash; the subscription can't be
-used for it. Create a key at
-[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
-(Anthropic Console → Settings → API keys); it starts with `sk-ant-`. Running **Set
-Anthropic API Key** offers an *Open Anthropic Console* button that takes you there.
+That button uses the Anthropic **API**, which is **separate** from your Claude Code /
+claude.ai subscription &mdash; your subscription login can't be used for it. Create a
+key at [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys)
+(Claude Console → Settings → API keys); it starts with `sk-ant-`. Running **Set
+Anthropic API Key** offers an *Open Claude Console* button that takes you there.
 The key is stored in VS Code Secret Storage and used only for this feature; each
-explanation is a single API call (cents on Sonnet) billed to that key. Clear it
+explanation is a single API call (cents on Sonnet) billed to that key, and Max, Ultra
+and Team plans include monthly API credits that can cover it (see below). Clear it
 anytime with **Clear Anthropic API Key**. The rest of the extension &mdash; status
 bar, dashboard, limits, the local Advisor tips &mdash; needs no API key.
 
-**A subscription (Pro/Max) isn't enough for the API by itself &mdash; HTTP 400
-"credit balance is too low".** The Anthropic **API** is pay-as-you-go and
-**separate** from your Claude Code / claude.ai subscription and its session limits.
-Your `sk-ant-` key is valid, but its API account has no credit &mdash; a Pro/Max plan
-does not include API credit, and the subscription login can't be used to power
-third-party AI calls. Add a little credit at
-[console.anthropic.com → Billing](https://console.anthropic.com/settings/billing),
-then try again. (It's only cents per explanation.)
+**HTTP 400 "credit balance is too low".**
+Your `sk-ant-` key is valid, but its Console organization has no API credit. The API is
+**separate** from your Claude Code / claude.ai usage limits, and the subscription login
+can't be used to power third-party AI calls. How you get credit depends on your plan:
+
+- **Max, Ultra and Team** include
+  [monthly API credits](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers).
+  Link a Console organization in your claude.ai billing settings, then use a key from
+  that organization.
+- **Other plans**, or if your credits have run out: add a little credit at
+  [platform.claude.com → Billing](https://platform.claude.com/settings/billing), then
+  try again. (It's only cents per explanation.)
+
+The warning in your editor has a button for each.
 
 ## Development
 
 ```bash
 npm install --include=dev   # install dev dependencies
 npm run compile             # type-check + build to ./out
+npm test                    # compile, then run the test suite
 # then press F5 in VS Code / Cursor to launch the Extension Development Host
 ```
 
@@ -329,12 +365,11 @@ npm run compile             # type-check + build to ./out
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release corrects
-**Claude Opus 5.5 pricing**, which was billed at Opus 5's rates and overstated its cost by
-close to 2×, and fixes Haiku 5.5 pricing and the Mythos 5.1 and Sonnet 5.5 cache-read rates.
-Each editor window now shows **its own conversation's context %** instead of whichever session
-wrote last, limit alerts **no longer repeat every few minutes**, and the extension **no longer
-renews Claude Code's login** itself &mdash; it only ever reads the access token.
+See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release adds
+**Ultra plan support**: on an account with no 5-hour limit, the `5h` item stays hidden and the
+weekly limit takes over the pace meter. Per-model weekly limits such as Fable now **fire
+warnings** and can appear in the status bar with `showModelWeekly`, and the credit guidance now
+covers the **monthly API credits** included with Max, Ultra, and Team plans.
 
 ## License
 

@@ -4,6 +4,40 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.7.0] - 2026-11-01
+
+### Added
+- **Ultra plan support.** Anthropic has renamed Max 20x to Ultra, and verified Ultra
+  accounts have no 5-hour limit. On an account with no 5-hour limit, the `5h` item stays
+  hidden and the weekly limit takes over the live pace meter (`wk 10% → 22%`), since it's
+  the only limit you have. `showWeeklyEta` turns the meter off. Ultra accounts that
+  aren't verified yet have a temporary 5-hour limit and keep showing it, and other plans
+  look the same as before.
+- **Warnings for per-model weekly limits.** The separate weekly Fable limit now fires the
+  same threshold warnings as your other limits (75% / 90% by default), so reaching it no
+  longer comes without notice.
+- **`showModelWeekly` setting.** Shows your most-used per-model weekly limit in the status
+  bar (`fable 12%`). Off by default.
+- **The dashboard shows what a per-model limit covers,** such as "Up to 50% of your weekly
+  limit" on the Fable bar, so its percentage has something to be read against.
+
+### Changed
+- **The Advisor and Explain with AI no longer assume a 5-hour limit.** They now talk about
+  your plan limits, and the summary sent to Explain with AI lists only the limits you have,
+  so an account with no 5-hour limit no longer reports `5-hour n/a`.
+- **`showOpusWeekly` is deprecated in favor of `showModelWeekly`.** It could no longer show
+  anything, because plans now have a weekly Fable limit rather than an Opus one. It still
+  works, and now behaves like the new setting.
+
+### Fixed
+- **API credit guidance was out of date.** Max, Ultra and Team plans include monthly API
+  credits, but the "credit balance is too low" messages and the README said subscriptions
+  include none. They now explain how to claim them, by linking a Claude Console
+  organization in your claude.ai billing settings, and the warning links straight there.
+- **A limit scoped to a product rather than a model** is now shown under its own name
+  instead of "Scoped".
+- **Console links** now go straight to `platform.claude.com`.
+
 ## [1.6.1] - 2026-10-29
 
 ### Fixed

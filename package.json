@@ -2,7 +2,7 @@
   "name": "claude-code-usage-tracker-wb00",
   "displayName": "Claude Code Usage & Cost Tracker",
   "description": "Track your Claude Code token usage and estimated cost from your local logs, right in the status bar.",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "publisher": "wheelbarrel00",
   "author": {
     "name": "Wheelbarrel00"
@@ -87,7 +87,7 @@
         "claudeCodeUsageTracker.showLimits": {
           "type": "boolean",
           "default": true,
-          "description": "Show 5-hour and weekly plan-limit utilization in the status bar."
+          "description": "Show your plan limits in the status bar: the weekly limit, plus the 5-hour limit if your plan has one."
         },
         "claudeCodeUsageTracker.useLiveApi": {
           "type": "boolean",
@@ -101,10 +101,16 @@
           "maximum": 3600,
           "description": "Minimum seconds between live usage-endpoint requests. The status bar still refreshes on its normal interval; this only throttles network calls to the limits API."
         },
+        "claudeCodeUsageTracker.showModelWeekly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also show your most-used per-model weekly limit in the status bar (e.g. fable NN%), after your other plan limits. Requires Show Limits and a plan with a per-model limit."
+        },
         "claudeCodeUsageTracker.showOpusWeekly": {
           "type": "boolean",
           "default": false,
-          "description": "Also show the weekly Opus limit (opus NN%) in the status bar, after the 5-hour and weekly figures. Requires Show Limits and a live weekly-Opus window."
+          "description": "Replaced by Show Model Weekly.",
+          "deprecationMessage": "Replaced by Show Model Weekly, which follows whichever per-model limit your plan has. This setting still works."
         },
         "claudeCodeUsageTracker.showContext": {
           "type": "boolean",
@@ -144,7 +150,7 @@
         "claudeCodeUsageTracker.predictiveAlerts.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Predictive alerts: project where your 5-hour limit lands by reset at your current pace, flag the weekly limit when you're on track to hit it before it resets, and warn before you run out. The 5-hour pace meter shows from early in the window (damped at first, firming up by the half-mark); the weekly ETA and the breach warning appear only once a window is half over and you're actively burning. Turn off to disable all prediction features."
+          "description": "Predictive alerts: project where your 5-hour limit lands by reset at your current pace, flag the weekly limit when you're on track to hit it before it resets, and warn before you run out. The 5-hour pace meter shows from early in the window (damped at first, firming up by the half-mark); the weekly ETA and the breach warning appear only once a window is half over and you're actively burning. A plan with no 5-hour limit gets the pace meter on its weekly limit instead. Turn off to disable all prediction features."
         },
         "claudeCodeUsageTracker.predictiveAlerts.windowMinutes": {
           "type": "number",
@@ -162,13 +168,13 @@
             75,
             90
           ],
-          "description": "Utilization percentages at which to show a warning notification for either window. Each threshold fires once per window (re-armed when the window resets). At least one threshold is required; a window at 100% is always shown in the error colour regardless.",
+          "description": "Utilization percentages at which to show a warning notification for each plan limit, including per-model weekly limits. Each threshold fires once per window (re-armed when the window resets). At least one threshold is required; a window at 100% is always shown in the error colour regardless.",
           "minItems": 1
         },
         "claudeCodeUsageTracker.predictiveAlerts.predictBreach": {
           "type": "boolean",
           "default": true,
-          "description": "Also warn when your current pace clearly projects you'll hit a limit before it resets (e.g. \"~20m to the 5-hour limit, before it resets in 1h10m\"). Fires only once the window is half over, you're actively burning, and you're clear of the on-pace band — so it never contradicts a meter reading `· on pace`."
+          "description": "Also warn when your current pace clearly projects you'll hit your 5-hour or weekly limit before it resets (e.g. \"~20m to the 5-hour limit, before it resets in 1h10m\"). Fires only once the window is half over, you're actively burning, and you're clear of the on-pace band — so it never contradicts a meter reading `· on pace`. Per-model weekly limits get threshold warnings only."
         },
         "claudeCodeUsageTracker.predictiveAlerts.showFiveHourEta": {
           "type": "boolean",
@@ -178,7 +184,7 @@
         "claudeCodeUsageTracker.predictiveAlerts.showWeeklyEta": {
           "type": "boolean",
           "default": true,
-          "description": "Show a time-to-limit ETA for the weekly window — but only when your pace is clearly on track to hit the weekly limit before it resets, you're actively burning, and the week is at least half elapsed (the weekly number moves over days, so a constant readout would be noisy). Turn off to hide the weekly ETA entirely."
+          "description": "Show a forecast for the weekly limit. If your plan has a 5-hour limit, this is a time-to-limit ETA, shown only when your pace is clearly on track to hit the weekly limit before it resets, you're actively burning, and the week is at least half elapsed (the weekly number moves over days, so a constant readout would be noisy). If your plan has no 5-hour limit, the weekly limit gets the always-on pace meter instead (e.g. `wk 10% → 22%`). Turn off to hide the weekly forecast entirely."
         },
         "claudeCodeUsageTracker.predictiveAlerts.modelAdvisor.enabled": {
           "type": "boolean",

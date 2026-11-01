@@ -10,8 +10,11 @@ import { withRealPaths } from './paths';
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const SECRET_KEY = 'claudeCodeUsageTracker.anthropicApiKey';
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
-const CONSOLE_KEYS_URL = 'https://console.anthropic.com/settings/keys';
-const CONSOLE_BILLING_URL = 'https://console.anthropic.com/settings/billing';
+const CONSOLE_KEYS_URL = 'https://platform.claude.com/settings/keys';
+const CONSOLE_BILLING_URL = 'https://platform.claude.com/settings/billing';
+const CLAUDE_BILLING_URL = 'https://claude.ai/settings/billing';
+const INCLUDED_CREDITS_NOTE =
+  'Max, Ultra and Team plans include monthly API credits: link a Claude Console organization in your claude.ai billing settings, then use a key from that organization.';
 const ANTHROPIC_VERSION = '2023-06-01';
 const REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_MODEL = 'claude-sonnet-5';
@@ -106,11 +109,12 @@ export class AiAdvisor {
   constructor(private readonly secrets: vscode.SecretStorage) {}
 
   async setApiKey(): Promise<void> {
-    const OPEN = 'Open Anthropic Console';
+    const OPEN = 'Open Claude Console';
     const ENTER = 'I have a key';
     const choice = await vscode.window.showInformationMessage(
-      'The AI Advisor uses your own Anthropic API key — a pay-as-you-go key from the Anthropic Console ' +
-        '(console.anthropic.com → Settings → API keys), billed separately from your Claude Code / claude.ai subscription.',
+      'The AI Advisor uses your own Anthropic API key from the Claude Console ' +
+        '(platform.claude.com → Settings → API keys), separate from your Claude Code / claude.ai usage limits. ' +
+        INCLUDED_CREDITS_NOTE,
       OPEN,
       ENTER
     );
@@ -121,7 +125,7 @@ export class AiAdvisor {
     }
     const key = await vscode.window.showInputBox({
       title: 'Anthropic API Key — AI Advisor',
-      prompt: 'Paste your key from console.anthropic.com/settings/keys. Stored in VS Code Secret Storage; used only for the AI Advisor.',
+      prompt: 'Paste your key from platform.claude.com/settings/keys. Stored in VS Code Secret Storage; used only for the AI Advisor.',
       password: true,
       ignoreFocusOut: true,
       placeHolder: 'sk-ant-...',
@@ -189,13 +193,15 @@ export class AiAdvisor {
     }
 
     if (!result.ok && creditError) {
-      const BILLING = 'Open Billing';
+      const CLAIM = 'Open claude.ai Billing';
+      const BILLING = 'Open Console Billing';
       void vscode.window.showWarningMessage(
-        '“Explain with AI” needs a little pay-as-you-go Anthropic API credit — it is billed separately from your Claude Code / Pro / Max subscription.',
+        `“Explain with AI” needs a little Anthropic API credit, which is separate from your Claude Code usage limits. ${INCLUDED_CREDITS_NOTE} Otherwise, add a little credit in the Claude Console.`,
+        CLAIM,
         BILLING
       ).then((pick) => {
-        if (pick === BILLING) {
-          void vscode.env.openExternal(vscode.Uri.parse(CONSOLE_BILLING_URL));
+        if (pick) {
+          void vscode.env.openExternal(vscode.Uri.parse(pick === CLAIM ? CLAUDE_BILLING_URL : CONSOLE_BILLING_URL));
         }
       });
     }
@@ -246,8 +252,8 @@ export class AiAdvisor {
           result: {
             ok: false,
             error:
-              `${detail}\n\nThe Anthropic API is pay-as-you-go and separate from your Claude Code subscription. ` +
-              `Add a little credit at console.anthropic.com → Billing, then try again.`,
+              `${detail}\n\nThe Anthropic API is separate from your Claude Code usage limits. ${INCLUDED_CREDITS_NOTE} ` +
+              `Otherwise, add a little credit at platform.claude.com → Billing, then try again.`,
           },
         };
       }

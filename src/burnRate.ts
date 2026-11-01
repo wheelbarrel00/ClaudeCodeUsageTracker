@@ -177,6 +177,10 @@ export interface WindowState {
 
 export type EtaMode = 'projection' | 'risk' | 'off';
 
+export function effectiveWeeklyMode(configured: EtaMode, hasSessionLimit: boolean): EtaMode {
+  return configured === 'risk' && !hasSessionLimit ? 'projection' : configured;
+}
+
 export interface WindowInput {
   utilization: number;
   resetsAt?: number;

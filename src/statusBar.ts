@@ -4,13 +4,13 @@ import { ContextInfo } from './dataLoader';
 import {
   PlanLimits,
   LimitWindow,
-  ScopedLimit,
   ExtraUsage,
   SeverityBand,
   severityBand,
   formatReset,
   formatAge,
   formatExtraSpend,
+  topScoped,
 } from './limitsReader';
 import { PredictionView } from './prediction';
 import { hasSubscription } from './credentials';
@@ -23,13 +23,13 @@ const ICON = '$(ccut-claude)';
 export class StatusBarController {
   private readonly fiveHour: vscode.StatusBarItem;
   private readonly weekly: vscode.StatusBarItem;
-  private readonly opus: vscode.StatusBarItem;
+  private readonly modelWeekly: vscode.StatusBarItem;
   private readonly main: vscode.StatusBarItem;
 
   constructor() {
     this.fiveHour = this.createItem('fiveHourLimit', 'Claude Usage: 5-Hour Limit', 104);
     this.weekly = this.createItem('weeklyLimit', 'Claude Usage: Weekly Limit', 103);
-    this.opus = this.createItem('opusLimit', 'Claude Usage: Opus Weekly Limit', 102);
+    this.modelWeekly = this.createItem('modelWeeklyLimit', 'Claude Usage: Model Weekly Limit', 102);
     this.main = this.createItem('main', 'Claude Usage', 101);
     this.main.text = `${ICON} Claude usage`;
     this.main.show();
@@ -46,7 +46,7 @@ export class StatusBarController {
   render(summary: UsageSummary, limits?: PlanLimits, context?: ContextInfo, prediction?: PredictionView): void {
     const cfg = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const showLimits = cfg.get<boolean>('showLimits', true);
-    const showOpusWeekly = cfg.get<boolean>('showOpusWeekly', false);
+    const showModelWeekly = cfg.get<boolean>('showModelWeekly', false) || cfg.get<boolean>('showOpusWeekly', false);
     const showContext = cfg.get<boolean>('showContext', true);
     const showCost = cfg.get<boolean>('showCost', true);
     const showTokens = cfg.get<boolean>('showTokens', true);
@@ -64,7 +64,8 @@ export class StatusBarController {
     const live = showLimits ? limits : undefined;
     this.renderLimit(this.fiveHour, '5h', live?.fiveHour, thresholds, tooltip, pred?.fiveHour?.segment);
     this.renderLimit(this.weekly, 'wk', live?.sevenDay, thresholds, tooltip, pred?.sevenDay?.segment);
-    this.renderLimit(this.opus, 'opus', showOpusWeekly && live ? opusWindow(live) : undefined, thresholds, tooltip);
+    const model = showModelWeekly && live ? topScoped(live) : undefined;
+    this.renderLimit(this.modelWeekly, model?.label.toLowerCase() ?? '', model, thresholds, tooltip);
 
     const parts: string[] = [];
     if (showContext && context) {
@@ -113,13 +114,9 @@ export class StatusBarController {
   dispose(): void {
     this.fiveHour.dispose();
     this.weekly.dispose();
-    this.opus.dispose();
+    this.modelWeekly.dispose();
     this.main.dispose();
   }
-}
-
-function opusWindow(limits: PlanLimits): ScopedLimit | undefined {
-  return limits.scoped.find((scoped) => /opus/i.test(scoped.label));
 }
 
 function bandColor(band: SeverityBand): vscode.ThemeColor {

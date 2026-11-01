@@ -8,6 +8,7 @@ import {
   burnRate,
   evaluateWindow,
   emptyWindowState,
+  effectiveWeeklyMode,
   sanitizeThresholds,
   modelAdvice,
   describeProjection,
@@ -67,11 +68,18 @@ export class PredictionController {
     }
     const burn = burnRate(records, now, cfg.windowMs);
     const recentlyActive = burn.recordCount > 0;
+    const weeklyMode = effectiveWeeklyMode(cfg.weeklyEtaMode, limits?.hasSessionLimit ?? true);
+    const sameName = new Map<string, number>();
+    for (const scoped of limits?.scoped ?? []) {
+      const occurrence = sameName.get(scoped.label) ?? 0;
+      sameName.set(scoped.label, occurrence + 1);
+      this.evaluate(`scoped:${scoped.label}:${occurrence}`, `${scoped.label} weekly`, scoped, SEVEN_DAY_PERIOD_MS, 'off', recentlyActive, cfg, now);
+    }
     return {
       enabled: true,
       burn,
       fiveHour: this.evaluate(FIVE_HOUR, '5-hour', limits?.fiveHour, FIVE_HOUR_PERIOD_MS, cfg.fiveHourEtaMode, recentlyActive, cfg, now),
-      sevenDay: this.evaluate(SEVEN_DAY, 'weekly', limits?.sevenDay, SEVEN_DAY_PERIOD_MS, cfg.weeklyEtaMode, recentlyActive, cfg, now),
+      sevenDay: this.evaluate(SEVEN_DAY, 'weekly', limits?.sevenDay, SEVEN_DAY_PERIOD_MS, weeklyMode, recentlyActive, cfg, now),
     };
   }
 

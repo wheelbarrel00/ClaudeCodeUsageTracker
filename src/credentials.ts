@@ -158,7 +158,7 @@ export function isSubscription(): boolean {
 }
 
 export function hasSubscription(limits?: PlanLimits): boolean {
-  return !!(limits?.fiveHour || limits?.sevenDay) || isSubscription();
+  return !!(limits?.fiveHour || limits?.sevenDay || limits?.scoped.length) || isSubscription();
 }
 
 export function __resetCredentialCacheForTests(): void {

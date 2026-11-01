@@ -11,6 +11,7 @@ import {
   formatEta,
   evaluateWindow,
   emptyWindowState,
+  effectiveWeeklyMode,
   sanitizeThresholds,
   modelAdvice,
   FIVE_HOUR_PERIOD_MS,
@@ -429,6 +430,26 @@ test('weekly window (risk mode) hides its ETA while idle even when on track', ()
     recentlyActive: false,
   });
   assert.equal(outcomes[0].annotation, 'none');
+  assert.equal(outcomes[0].fireBreach, false);
+});
+
+test('the weekly limit takes the pace meter only when there is no 5-hour limit', () => {
+  assert.equal(effectiveWeeklyMode('risk', false), 'projection');
+  assert.equal(effectiveWeeklyMode('risk', true), 'risk');
+  assert.equal(effectiveWeeklyMode('off', false), 'off');
+  assert.equal(effectiveWeeklyMode('off', true), 'off');
+});
+
+test('a weekly pace meter reads on the weekly scale and stays quiet about breaching', () => {
+  const now0 = 1_000_000_000;
+  const reset = now0 + (SEVEN_DAY_PERIOD_MS - 64 * HOUR);
+  const { outcomes } = runWindow([{ now: now0, utilization: 10, resetsAt: reset }], {
+    etaMode: 'projection',
+    periodMs: SEVEN_DAY_PERIOD_MS,
+    thresholds: [],
+  });
+  assert.equal(outcomes[0].annotation, 'projection');
+  assert.equal(Math.round(outcomes[0].projectedUtil!), 22);
   assert.equal(outcomes[0].fireBreach, false);
 });
 

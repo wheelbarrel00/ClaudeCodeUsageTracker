@@ -89,7 +89,7 @@ function modelMixInsight(records: UsageRecord[], money: Money, subscription: boo
       `You ran ${best.count} short ${family} turns (averaging ${avgOut} output tokens) this period — ` +
       `routine work a cheaper model usually handles well. At the same token counts, those turns on ${label} ` +
       (subscription
-        ? `are about ${money(bestSavings)} cheaper at API-equivalent rates — and on a subscription, routing routine work to a lighter model stretches your 5-hour / weekly limits further.`
+        ? `are about ${money(bestSavings)} cheaper at API-equivalent rates — and on a subscription, routing routine work to a lighter model stretches your plan limits further.`
         : `would have cost about ${money(bestSavings)} less.`),
     action: `Switch to ${label} for quick edits, lookups, and other routine turns (the /model command).`,
     savingsUsd: bestSavings,
@@ -178,7 +178,7 @@ function forecastInsight(
       detail:
         `Your usage so far is worth about ${money(total)} at pay-as-you-go API prices, on track to ` +
         `~${money(projected)} by month end. You're on a subscription with a flat fee, so treat this as a ` +
-        `usage gauge — your real limit is the 5-hour / weekly session caps, not a bill.`,
+        `usage gauge — your real limits are your plan's usage limits, not a bill.`,
       evidence: `≈ ${money(projected)} API-equivalent`,
     };
   }

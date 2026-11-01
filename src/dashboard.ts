@@ -18,7 +18,16 @@ import {
   SessionSummary,
   TrendBucket,
 } from './dataLoader';
-import { PlanLimits, LimitWindow, ExtraUsage, severityBand, formatReset, formatAge, formatExtraSpend } from './limitsReader';
+import {
+  PlanLimits,
+  LimitWindow,
+  ExtraUsage,
+  severityBand,
+  formatReset,
+  formatAge,
+  formatExtraSpend,
+  formatWeeklyShare,
+} from './limitsReader';
 import { analyze, Insight, savingsBadge } from './advisor';
 import { AiAdvisor, AiResult } from './aiAdvisor';
 import { hasSubscription } from './credentials';
@@ -237,7 +246,7 @@ function advisorSection(
     ? `<button id="advisor-explain" class="advisor-explain" title="Send your usage summary to Anthropic with your own API key for a written explanation">Explain with AI</button>`
     : '';
   const note = subscription
-    ? `<div class="advisor-note">Dollar figures are estimated pay-as-you-go API cost — a gauge of usage, not your subscription bill. Your real limit is the 5-hour / weekly caps above.</div>`
+    ? `<div class="advisor-note">Dollar figures are estimated pay-as-you-go API cost — a gauge of usage, not your subscription bill. Your real limits are the plan limits above.</div>`
     : '';
   return `<section class="advisor">
     <div class="advisor-head-row"><h2 class="section">Advisor</h2>${explain}</div>
@@ -333,7 +342,7 @@ function extraUsageSection(extra: ExtraUsage | undefined): string {
   </section>`;
 }
 
-function limitsSection(limits: PlanLimits | undefined, thresholds: number[]): string {
+export function limitsSection(limits: PlanLimits | undefined, thresholds: number[]): string {
   if (!limits) {
     return '';
   }
@@ -345,7 +354,7 @@ function limitsSection(limits: PlanLimits | undefined, thresholds: number[]): st
     rows.push(barRow('Weekly · all models', limits.sevenDay, thresholds));
   }
   for (const scoped of limits.scoped) {
-    rows.push(barRow(`Weekly · ${scoped.label}`, scoped, thresholds));
+    rows.push(barRow(`Weekly · ${scoped.label}`, scoped, thresholds, formatWeeklyShare(scoped)));
   }
   if (rows.length === 0) {
     return '';
@@ -360,11 +369,11 @@ ${rows.join('\n')}
   </section>`;
 }
 
-function barRow(label: string, window: LimitWindow, thresholds: number[]): string {
+function barRow(label: string, window: LimitWindow, thresholds: number[], note = ''): string {
   const pct = Math.round(window.utilization);
   const width = Math.min(100, Math.max(0, pct));
-  const reset = formatReset(window.resetsAt);
-  const sub = reset ? `\n        <div class="bar-sub">${esc(reset)}</div>` : '';
+  const detail = [note, formatReset(window.resetsAt)].filter(Boolean).join(' · ');
+  const sub = detail ? `\n        <div class="bar-sub">${esc(detail)}</div>` : '';
   return `      <div class="bar-row">
         <div class="bar-head"><span>${esc(label)}</span><span class="bar-pct">${pct}%</span></div>
         <div class="bar-track"><div class="bar-fill ${severityBand(window, thresholds)}" style="width:${width}%"></div></div>${sub}

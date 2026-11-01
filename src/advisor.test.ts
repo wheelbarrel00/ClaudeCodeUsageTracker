@@ -187,11 +187,12 @@ test('spend-forecast reframes as API-equivalent usage on a subscription', () => 
   assert.match(insight!.detail, /usage gauge|not a bill/);
 });
 
-test('model-mix points a subscriber to their session limits (savings unchanged)', () => {
+test('model-mix points a subscriber to their plan limits (savings unchanged)', () => {
   const records = Array.from({ length: 6 }, () => record({ input: 1_000_000, output: 100 }, 'claude-opus-4-8'));
   const insight = byId(run({ records, subscription: true }), 'model-mix');
   assert.ok(insight);
-  assert.match(insight!.detail, /5-hour \/ weekly limits/);
+  assert.match(insight!.detail, /your plan limits/);
+  assert.doesNotMatch(insight!.detail, /5-hour/);
   assert.ok(insight!.savingsUsd! > 18 && insight!.savingsUsd! < 18.01);
 });
 

@@ -12,6 +12,7 @@ export interface LimitWindow {
 
 export interface ScopedLimit extends LimitWindow {
   label: string;
+  weeklyShare?: number;
 }
 
 export interface ExtraUsage {
@@ -29,6 +30,8 @@ export interface PlanLimits {
   scoped: ScopedLimit[];
   extraUsage?: ExtraUsage;
   fetchedAt?: number;
+  // Separate from fiveHour, which is also undefined when a reading has merely gone stale.
+  hasSessionLimit: boolean;
 }
 
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -115,7 +118,14 @@ export function mapUsageData(data: any, fetchedAt: number): PlanLimits | undefin
     }
   }
 
-  const fiveHour = applyExpiry(windowFromLimit(byKind.get('session')) ?? windowFromTop(data.five_hour), now, 0, fetchedAt);
+  // The rows say which limits apply, so weekly rows with no session row mean no 5-hour limit.
+  const hasSessionRow = byKind.has('session');
+  const hasWeeklyRows = byKind.has('weekly_all') || scopedRaw.length > 0;
+  const session =
+    windowFromLimit(byKind.get('session')) ??
+    (hasSessionRow || !hasWeeklyRows ? windowFromTop(data.five_hour) : undefined);
+  const hasSessionLimit = hasSessionRow || (!hasWeeklyRows && data.five_hour !== null);
+  const fiveHour = applyExpiry(session, now, 0, fetchedAt);
   const sevenDay = applyExpiry(
     windowFromLimit(byKind.get('weekly_all')) ?? windowFromTop(data.seven_day),
     now,
@@ -132,6 +142,7 @@ export function mapUsageData(data: any, fetchedAt: number): PlanLimits | undefin
     const win = applyExpiry<ScopedLimit>(
       {
         label: scopeLabel(entry.scope),
+        weeklyShare: weeklyShareOf(data, entry),
         utilization: Math.max(0, utilization),
         resetsAt: parseResetsAt(entry.resets_at),
         severity: severityOf(entry.severity),
@@ -154,7 +165,19 @@ export function mapUsageData(data: any, fetchedAt: number): PlanLimits | undefin
   if (!fiveHour && !sevenDay && scoped.length === 0 && !extraUsage) {
     return undefined;
   }
-  return { fiveHour, sevenDay, scoped, extraUsage, fetchedAt };
+  return { fiveHour, sevenDay, scoped, extraUsage, fetchedAt, hasSessionLimit };
+}
+
+export function topScoped(limits: PlanLimits): ScopedLimit | undefined {
+  return limits.scoped.reduce<ScopedLimit | undefined>(
+    (top, scoped) => (!top || scoped.utilization > top.utilization ? scoped : top),
+    undefined
+  );
+}
+
+export function formatWeeklyShare(limit: ScopedLimit): string {
+  const share = Math.round(limit.weeklyShare ?? 0);
+  return share > 0 ? `Up to ${share}% of your weekly limit` : '';
 }
 
 function parseExtraUsage(raw: any): ExtraUsage | undefined {
@@ -296,8 +319,17 @@ function pushTopScoped(out: ScopedLimit[], label: string, raw: any, now: number,
 }
 
 function scopeLabel(scope: any): string {
-  const name = scope?.model?.display_name;
+  const name = scope?.model?.display_name || scope?.surface?.display_name;
   return typeof name === 'string' && name ? name : 'Scoped';
+}
+
+function weeklyShareOf(data: any, entry: any): number | undefined {
+  if (!Array.isArray(data.weekly_scoped_shares)) {
+    return undefined;
+  }
+  const index = data.limits.indexOf(entry);
+  const share = data.weekly_scoped_shares.find((candidate: any) => candidate?.limit_index === index);
+  return num(share?.allowance_percent_of_weekly);
 }
 
 function num(value: unknown): number | undefined {
