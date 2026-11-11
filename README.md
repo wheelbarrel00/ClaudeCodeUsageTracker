@@ -363,6 +363,16 @@ npm test                    # compile, then run the test suite
 
 `npm run watch` keeps the compiler running while you work.
 
+## Localization
+
+The status bar, tooltips, notifications, commands, and settings follow VS Code's display
+language. English is the source language; a Russian translation ships with the extension.
+
+To add a language, copy `package.nls.json` to `package.nls.<locale>.json` and
+`l10n/bundle.l10n.ru.json` to `l10n/bundle.l10n.<locale>.json`, then translate the values.
+In the bundle the English text is the key, so keep keys and `{0}` placeholders unchanged.
+New user-facing strings go through `t()` from `src/l10n.ts`.
+
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release adds

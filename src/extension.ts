@@ -9,6 +9,7 @@ import { PredictionController, PredictionView } from './prediction';
 import { AiAdvisor, workspaceCwds } from './aiAdvisor';
 import { numberSetting, REFRESH_INTERVAL_S, LIVE_API_MIN_INTERVAL_S } from './settings';
 import { UsageRecord, UsageSummary, emptySummary } from './types';
+import { setTranslator } from './l10n';
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 
@@ -30,6 +31,7 @@ let latestPrediction: PredictionView | undefined;
 const LIMITS_FALLBACK_MAX_MS = 10 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
+  setTranslator(vscode.l10n.t);
   const ai = new AiAdvisor(context.secrets);
   statusBar = new StatusBarController();
   dashboard = new Dashboard(ai);
