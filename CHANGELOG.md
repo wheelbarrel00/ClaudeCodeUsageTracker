@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com), and the project
 aims to follow [Semantic Versioning](https://semver.org).
 
+## [1.8.0] - 2026-11-20
+
+### Added
+- **Russian translation.** The extension now follows VS Code's display language. With VS
+  Code set to Russian, the status bar, its tooltip, the limit and model-cost notifications,
+  commands, and settings appear in Russian. The dashboard and the AI Advisor are not fully
+  translated yet; that is coming in a later release. Contributed by
+  [GriffTanen](https://github.com/GriffTanen).
+
 ## [1.7.0] - 2026-11-01
 
 ### Added

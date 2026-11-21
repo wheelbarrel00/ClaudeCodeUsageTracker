@@ -365,8 +365,9 @@ npm test                    # compile, then run the test suite
 
 ## Localization
 
-The status bar, tooltips, notifications, commands, and settings follow VS Code's display
-language. English is the source language; a Russian translation ships with the extension.
+The status bar, its tooltip, the limit and model-cost notifications, commands, and settings
+follow VS Code's display language. English is the source language; a Russian translation ships
+with the extension. The dashboard and the AI Advisor are not fully translated yet.
 
 To add a language, copy `package.nls.json` to `package.nls.<locale>.json` and
 `l10n/bundle.l10n.ru.json` to `l10n/bundle.l10n.<locale>.json`, then translate the values.
@@ -375,11 +376,10 @@ New user-facing strings go through `t()` from `src/l10n.ts`.
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release adds
-**Ultra plan support**: on an account with no 5-hour limit, the `5h` item stays hidden and the
-weekly limit takes over the pace meter. Per-model weekly limits such as Fable now **fire
-warnings** and can appear in the status bar with `showModelWeekly`, and the credit guidance now
-covers the **monthly API credits** included with Max, Ultra, and Team plans.
+See [CHANGELOG.md](./CHANGELOG.md) for the full, dated history. The latest release adds a
+**Russian translation**: the extension now follows VS Code's display language, and with VS Code
+set to Russian the status bar, its tooltip, notifications about your limits, commands, and
+settings appear in Russian. The dashboard and the AI Advisor will be translated in a later release.
 
 ## License
 

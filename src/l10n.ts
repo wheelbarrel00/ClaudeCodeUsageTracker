@@ -1,8 +1,3 @@
-// Translation seam for user-facing strings. The English text is the key, as in vscode.l10n.
-// Modules that build text (limitsReader, burnRate, ...) are unit-tested under plain node and
-// must not import 'vscode', so the extension injects vscode.l10n.t on activation instead.
-// Until then - and in tests - strings come back in English with placeholders filled in.
-
 export type L10nArg = string | number | boolean;
 export type Translator = (message: string, ...args: L10nArg[]) => string;
 
@@ -15,7 +10,6 @@ function format(message: string, ...args: L10nArg[]): string {
 
 let translator: Translator = format;
 
-// Pass nothing to go back to plain English.
 export function setTranslator(next: Translator = format): void {
   translator = next;
 }
