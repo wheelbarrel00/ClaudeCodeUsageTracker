@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { claudeConfigDir } from './paths';
+import { t } from './l10n';
 
 export type Severity = string;
 
@@ -177,7 +178,7 @@ export function topScoped(limits: PlanLimits): ScopedLimit | undefined {
 
 export function formatWeeklyShare(limit: ScopedLimit): string {
   const share = Math.round(limit.weeklyShare ?? 0);
-  return share > 0 ? `Up to ${share}% of your weekly limit` : '';
+  return share > 0 ? t('Up to {0}% of your weekly limit', share) : '';
 }
 
 function parseExtraUsage(raw: any): ExtraUsage | undefined {
@@ -248,14 +249,14 @@ export function formatAge(fetchedAt?: number, now = Date.now()): string {
   }
   const minutes = Math.round(ms / 60000);
   if (minutes < 60) {
-    return `${minutes}m ago`;
+    return t('{0}m ago', minutes);
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours}h ago`;
+    return t('{0}h ago', hours);
   }
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t('{0}d ago', days);
 }
 
 export function formatReset(resetsAt?: number): string {
@@ -264,18 +265,18 @@ export function formatReset(resetsAt?: number): string {
   }
   const ms = resetsAt - Date.now();
   if (ms <= 0) {
-    return ms < -60000 ? '' : 'resetting now';
+    return ms < -60000 ? '' : t('resetting now');
   }
   const minutes = Math.round(ms / 60000);
   if (minutes < 60) {
-    return `resets in ${minutes}m`;
+    return t('resets in {0}m', minutes);
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `resets in ${hours}h ${minutes % 60}m`;
+    return t('resets in {0}h {1}m', hours, minutes % 60);
   }
   const days = Math.floor(hours / 24);
-  return `resets in ${days}d ${hours % 24}h`;
+  return t('resets in {0}d {1}h', days, hours % 24);
 }
 
 function windowFromLimit(entry: any): LimitWindow | undefined {

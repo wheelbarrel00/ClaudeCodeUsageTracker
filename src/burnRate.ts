@@ -1,5 +1,6 @@
 import { UsageRecord, TokenCounts, totalTokens } from './types';
 import { estimateCost, cheaperTier } from './pricing';
+import { t } from './l10n';
 
 export interface BurnRate {
   tokensPerMin: number;
@@ -148,24 +149,24 @@ export function describeProjection(
   rawUtil = projectedUtil
 ): { segment: string; detail: string } {
   if (Math.abs(rawUtil - 100) <= ON_PACE_BAND_PTS) {
-    return { segment: '· on pace', detail: 'on pace to use this window fully' };
+    return { segment: t('· on pace'), detail: t('on pace to use this window fully') };
   }
   const pct = Math.round(Math.min(projectedUtil, 999));
-  return { segment: `→ ${pct}%`, detail: `projected ~${pct}% by reset` };
+  return { segment: `→ ${pct}%`, detail: t('projected ~{0}% by reset', pct) };
 }
 
 export function formatEta(ms: number): string {
   const totalMinutes = Math.max(0, Math.round(ms / 60000));
   if (totalMinutes < 60) {
-    return `~${totalMinutes}m`;
+    return t('~{0}m', totalMinutes);
   }
   const totalHours = Math.floor(totalMinutes / 60);
   if (totalHours < 24) {
-    return `~${totalHours}h${String(totalMinutes % 60).padStart(2, '0')}m`;
+    return t('~{0}h{1}m', totalHours, String(totalMinutes % 60).padStart(2, '0'));
   }
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
-  return hours ? `~${days}d${hours}h` : `~${days}d`;
+  return hours ? t('~{0}d{1}h', days, hours) : t('~{0}d', days);
 }
 
 export interface WindowState {

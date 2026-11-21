@@ -3,6 +3,7 @@ import { UsageRecord } from './types';
 import { PlanLimits, LimitWindow, formatReset } from './limitsReader';
 import { familyLabel } from './pricing';
 import { formatCurrency } from './format';
+import { t } from './l10n';
 import { numberSetting, ACTIVITY_WINDOW_MIN } from './settings';
 import {
   burnRate,
@@ -23,7 +24,6 @@ import {
 
 const CONFIG_SECTION = 'claudeCodeUsageTracker';
 const ADVICE_COOLDOWN_MS = 4 * 60 * 60 * 1000;
-const DONT_SHOW_AGAIN = "Don't show again";
 
 export interface WindowEta {
   etaMs?: number;
@@ -73,13 +73,13 @@ export class PredictionController {
     for (const scoped of limits?.scoped ?? []) {
       const occurrence = sameName.get(scoped.label) ?? 0;
       sameName.set(scoped.label, occurrence + 1);
-      this.evaluate(`scoped:${scoped.label}:${occurrence}`, `${scoped.label} weekly`, scoped, SEVEN_DAY_PERIOD_MS, 'off', recentlyActive, cfg, now);
+      this.evaluate(`scoped:${scoped.label}:${occurrence}`, t('{0} weekly', scoped.label), scoped, SEVEN_DAY_PERIOD_MS, 'off', recentlyActive, cfg, now);
     }
     return {
       enabled: true,
       burn,
-      fiveHour: this.evaluate(FIVE_HOUR, '5-hour', limits?.fiveHour, FIVE_HOUR_PERIOD_MS, cfg.fiveHourEtaMode, recentlyActive, cfg, now),
-      sevenDay: this.evaluate(SEVEN_DAY, 'weekly', limits?.sevenDay, SEVEN_DAY_PERIOD_MS, weeklyMode, recentlyActive, cfg, now),
+      fiveHour: this.evaluate(FIVE_HOUR, t('5-hour'), limits?.fiveHour, FIVE_HOUR_PERIOD_MS, cfg.fiveHourEtaMode, recentlyActive, cfg, now),
+      sevenDay: this.evaluate(SEVEN_DAY, t('weekly'), limits?.sevenDay, SEVEN_DAY_PERIOD_MS, weeklyMode, recentlyActive, cfg, now),
     };
   }
 
@@ -134,7 +134,7 @@ export class PredictionController {
     } else if (outcome.annotation === 'eta' && outcome.etaMs !== undefined) {
       const eta = formatEta(outcome.etaMs);
       segment = `· ${eta}`;
-      detail = `${eta} to limit`;
+      detail = t('{0} to limit', eta);
     }
     return { etaMs: outcome.etaMs, segment, detail };
   }
@@ -146,28 +146,37 @@ export class PredictionController {
 
 function notifyThreshold(label: string, threshold: number, window: LimitWindow): void {
   const reset = formatReset(window.resetsAt);
-  const tail = reset ? ` — ${reset}.` : '.';
+  const used = Math.round(window.utilization);
   void vscode.window.showWarningMessage(
-    `Claude ${label} limit at ${Math.round(window.utilization)}% (warning at ${threshold}%)${tail}`
+    reset
+      ? t('Claude {0} limit at {1}% (warning at {2}%) — {3}.', label, used, threshold, reset)
+      : t('Claude {0} limit at {1}% (warning at {2}%).', label, used, threshold)
   );
 }
 
 function notifyBreach(label: string, etaMs: number, window: LimitWindow): void {
   const reset = formatReset(window.resetsAt);
-  const tail = reset ? `, before it ${reset}` : '';
+  const eta = formatEta(etaMs);
   void vscode.window.showWarningMessage(
-    `At this rate you'll hit the Claude ${label} limit in ${formatEta(etaMs)}${tail}.`
+    reset
+      ? t("At this rate you'll hit the Claude {0} limit in {1}, before it {2}.", label, eta, reset)
+      : t("At this rate you'll hit the Claude {0} limit in {1}.", label, eta)
   );
 }
 
 function notifyAdvice(advice: ModelAdvice, currency: string, decimals: number): void {
   const minutes = Math.round(advice.windowMs / 60000);
   const spend = formatCurrency(advice.modelCostUsd, currency, decimals);
-  const message =
-    `Mostly short ${familyLabel(advice.model)} turns lately (${spend} over ~${minutes}m). ` +
-    `A cheaper model like ${advice.cheaperLabel} could handle routine work for less.`;
-  void vscode.window.showInformationMessage(message, DONT_SHOW_AGAIN).then((choice) => {
-    if (choice === DONT_SHOW_AGAIN) {
+  const message = t(
+    'Mostly short {0} turns lately ({1} over ~{2}m). A cheaper model like {3} could handle routine work for less.',
+    familyLabel(advice.model),
+    spend,
+    minutes,
+    advice.cheaperLabel
+  );
+  const dontShowAgain = t("Don't show again");
+  void vscode.window.showInformationMessage(message, dontShowAgain).then((choice) => {
+    if (choice === dontShowAgain) {
       void vscode.workspace
         .getConfiguration(CONFIG_SECTION)
         .update('predictiveAlerts.modelAdvisor.enabled', false, vscode.ConfigurationTarget.Global);
